@@ -59,14 +59,20 @@ Changing a due date must safely cancel obsolete reminders and create the replace
 
 ### Memory service
 
-- `search_memory(query, allowed_scope, limit) -> MemorySearchResult[]`
+- `search_memory(query, purpose, resource_filters, limit, actor) -> MemorySearchResult[]`
 - `get_node(node_id, actor) -> GraphNode`
 - `get_neighbours(node_id, relation_filter, actor) -> GraphEdge[]`
 - `create_bridge(bridge_candidate, actor) -> Bridge`
 - `revoke_bridge(bridge_id, actor) -> Bridge`
-- `ingest_document(source, room_id, actor) -> IngestionJob`
+- `ingest_document(source, actor) -> IngestionJob`
 
-Callers cannot pass arbitrary room IDs as proof of access. The server resolves effective scope using the policy engine. Search results include safe source references and room/sensitivity labels only when the caller is authorized to see them.
+`resource_filters` narrow the query only; they never grant access. Callers cannot submit `allowed_scope` or arbitrary room IDs as proof of access. The server resolves document room and sensitivity from trusted metadata, derives the effective scope via the policy engine, and fails closed if either is missing. Ingestion checks permission before reading/extracting source content; room assignment must come from trusted configuration or an authorized explicit assignment, not untrusted document text. Search results include citations (source ID, document ID/version, and source location) and room/sensitivity labels only when the caller is authorized to see them. Citation dereference applies the same checks as content retrieval.
+
+### Policy service
+
+- `evaluate_access(context: AccessContext) -> PolicyDecision`
+
+`AccessContext` includes trusted `principal_id`, `persona_id`, nullable `job_id`, `room_id`, `resource_id` or typed resource scope, `action_id`, `sensitivity_label`, `destination`, `risk_tier`, `system_mode`, and approval reference where applicable. The policy service returns `allow`, `deny` or `requires_approval`, plus policy/version, sanitized reason, decision time and any server-derived effective filter. Do not expose this as an endpoint where clients can choose trusted context fields; the application constructs them from authenticated state.
 
 ### Job/orchestrator service
 
@@ -109,10 +115,14 @@ These are internal application routes, not Google API paths.
 | `GET` | `/api/v1/approvals` | List pending approvals |
 | `POST` | `/api/v1/approvals/{approval_id}/decision` | Approve or reject the displayed proposal |
 | `POST` | `/api/v1/memory/search` | Room-aware retrieval |
+| `GET` | `/api/v1/memory/nodes/{node_id}` | Retrieve an authorized graph node |
+| `GET` | `/api/v1/memory/nodes/{node_id}/neighbours` | Retrieve authorized edges and nodes |
 | `GET` | `/api/v1/integrations/classroom/courses` | List authorized Classroom courses |
 | `GET` | `/api/v1/integrations/classroom/coursework` | List assignments for an authorized course |
 
 The first prototype may expose only the endpoints needed for its workflow. Do not create generic `/execute-shell` or unrestricted `/tool-call` endpoints.
+
+Memory endpoints must not reveal denied resources through result counts, titles, labels, citations, or distinct error messages. Vector candidate selection and graph traversal are policy-filtered server-side; frontend filtering is never an authorization boundary. Before external model calls, the router authorizes every cited/context item and the assembled disclosure packet against the destination.
 
 ## Event contract
 
@@ -144,3 +154,14 @@ Initial event types include `task.created`, `task.updated`, `reminder.scheduled`
 ## Contract tests
 
 Write tests for invalid date candidates, unauthorized room search, stale approval, changed arguments, idempotent task creation, reminder rescheduling, expired OAuth consent, unavailable provider, and unverified submission.
+
+Memory/security contract tests must also prove:
+
+- A room-A caller cannot retrieve room-B chunk content, citation, source metadata, result count, graph node, edge, neighbor, or descriptive denial detail; include direct ID lookups as well as search/traversal.
+- A forged Qdrant payload or stale vector for a deleted, superseded, unlabelled or moved document is rejected by the authoritative SQLite re-check.
+- A missing room/sensitivity label and a policy-evaluator exception deny access without invoking an embedder, vector result serializer or model provider.
+- Revoked, expired, wrong-purpose, wrong-destination and field-expanded bridges expose no projected fields; bridge metadata itself is hidden from unauthorized callers.
+- A cloud prompt spy receives no unauthorized chunk, graph-derived field, citation excerpt or metadata, including when an allowed and denied result are returned together. Assert on the complete serialized prompt and provider-call count, not only on UI output.
+- Authorized citations resolve to the expected source, document version and page/section/offset; after update/deletion, old citation content is not returned.
+
+Use temporary SQLite databases, fake embedders, fake Qdrant candidate results, a deterministic policy engine and a provider spy. These tests require no Ollama, Google OAuth, Qdrant service or external API.

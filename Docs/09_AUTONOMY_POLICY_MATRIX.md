@@ -6,6 +6,10 @@ This document is the canonical default permission matrix for rooms, personas and
 
 All permissions are deny-by-default. A persona is a task mode, not a security boundary. The authenticated user can configure selected grants, but an agent/persona cannot grant itself new access or alter the policy that constrains it.
 
+The policy engine consumes the trusted context and returns the structured `allow`, `deny` or `requires_approval` decision defined in `04_SECURITY_PIPELINE.md`. A persona/room row or a bridge is not, by itself, an authorization grant. Evaluate principal, persona, room, resource, action, sensitivity, destination, risk tier, active job scope, approval and system mode together; a missing or unknown value denies. For a multi-resource read/disclosure, every item must be allowed.
+
+Use a centrally validated ordered sensitivity vocabulary: `public < internal < sensitive < restricted`. This label is independent of a room's cloud policy; both constraints apply, and the stricter rule wins. Initial defaults are `public_research: public`, `operations: internal`, `academic: sensitive`, `projects: sensitive`, `opportunities: internal`, `personal_vault: restricted`, and `health: restricted`. These are defaults for new trusted records, not permission to relabel existing content. Unknown labels deny. A label may only be raised through trusted code; lowering requires an explicit user-reviewed reclassification with provenance and audit. The exact destination thresholds remain an unresolved policy decision below.
+
 ## Knowledge rooms
 
 | Room | Typical content | Default cloud policy |
@@ -55,6 +59,8 @@ These are default capabilities, not grants to every record in a room. The policy
 
 A bridge is a narrow, explicit projection of approved fields. Example: a project room may share `project_id`, `assignment_title` and `deadline` with Operations, while keeping project notes and source documents private.
 
+Treat the bridge as a scoped data-transfer grant, not general source-room membership. At read time verify the caller's permission to use the bridge, source and destination room policies, purpose, receiving persona/service, exact field allowlist, expiry, revocation and sensitivity of every projected field. A bridge never authorizes additional graph traversal or vector search in the source room. Cloud disclosure of projected fields is denied unless both the bridge and destination/provider policy explicitly permit it.
+
 Every bridge must define:
 
 - source room and source entity/field allowlist
@@ -81,6 +87,15 @@ Bridges are visible, purpose-limited, revocable and deny-by-default. They are no
 Every tool call should be evaluated against: actor/user, persona, room, resource ID, action/tool ID, sensitivity label, provider destination, current job scope, risk tier, applicable approval, budget, time limits and current system mode (`normal`, `paused`, `maintenance`).
 
 Return a structured decision: `allow`, `deny` or `requires_approval`, with policy ID, human-readable reason, sanitized target, and decision timestamp. The executor must re-check the decision immediately before running a side effect.
+
+For graph and RAG queries, the policy engine—not the request—derives the room/resource filter used to constrain retrieval. Returned vector IDs, payload labels, graph metadata and source citations are untrusted until checked against authoritative records. Filtering must happen before snippets, result counts, labels, citations or denial details are exposed. The same decision path applies when those results are assembled into a local or hosted model prompt; each item and the final disclosure packet are checked against the destination immediately before send.
+
+## Unresolved security decisions
+
+- Define the maximum sensitivity label and allowed data categories for each hosted provider, and whether a user can grant a one-time disclosure exception. Until decided, only local destinations are allowed for `sensitive` and `restricted` data, and no provider is a fallback for a denied route.
+- Define policy administration and identity boundaries for this single-user local application (OS user only, or future authenticated principals), including who can change grants and reclassification labels.
+- Define bridge creation authority and whether destination-room owners/admins must approve a bridge in addition to its creator.
+- Define how classification defaults are overridden for mixed-sensitivity documents and derived chunks/graph facts. Derived content must inherit the most restrictive input label unless an explicit audited declassification rule is added.
 
 ## Example decisions
 
