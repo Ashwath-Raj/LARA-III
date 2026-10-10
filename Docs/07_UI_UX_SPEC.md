@@ -76,6 +76,14 @@ Task detail includes:
 
 Run detail shows goal, status, start time, current stage, scope, budget usage, checkpoints, pending approval, and source/artifact references. Reports show an executive summary first, then evidence, sources, decisions, uncertainty and next actions. Separate verified results from model inference.
 
+### AI Loops
+
+AI Loops is a first-class navigation item below Ask LARA. The session list shows lifecycle state and last activity; selecting a saved session restores it rather than creating another. A new session records its own goal, constraints, participant prompts, messages, evidence, graph records and artifacts.
+
+The Meeting Room presents the session brief and participant selectors, a round-grouped debate timeline, four selectable participant seats, and a read-only desktop-operator record. Participant views expose configured prompts and recorded contributions. Graph scopes are limited to the selected session and show only recorded claims, evidence and explicit relationships; a searchable list remains available when WebGL is unavailable. The synthesis view distinguishes conclusions, decisions, objections, uncertainty and source references.
+
+When no AI Loops API is connected, fixture and browser-saved records are explicitly labeled simulated. Creating a mock session does not start agents or desktop automation. Empty, failed, cancelled and awaiting-user states must not imply work that was not recorded. Mock loop storage uses a dedicated versioned key and must not clear unrelated browser data.
+
 ## Approval surfaces
 
 Any approval dialog must show:

@@ -14,6 +14,7 @@ const CalendarWorkspace = lazy(() => import('../../screens/CalendarWorkspace').t
 const ProjectsWorkspace = lazy(() => import('../../screens/ProjectsWorkspace').then(({ ProjectsWorkspace }) => ({ default: ProjectsWorkspace })));
 const KnowledgeGraphWorkspace = lazy(() => import('../../screens/KnowledgeGraphWorkspace').then(({ KnowledgeGraphWorkspace }) => ({ default: KnowledgeGraphWorkspace })));
 const AgentWorkbench = lazy(() => import('../../screens/AgentWorkbench').then(({ AgentWorkbench }) => ({ default: AgentWorkbench })));
+const AILoopsWorkspace = lazy(() => import('../../screens/AILoopsWorkspace').then(({ AILoopsWorkspace }) => ({ default: AILoopsWorkspace })));
 const RunsAndApprovalsWorkspace = lazy(() => import('../../screens/RunsAndApprovalsWorkspace').then(({ RunsAndApprovalsWorkspace }) => ({ default: RunsAndApprovalsWorkspace })));
 const RunConsoleScreen = lazy(() => import('../../screens/RunConsoleScreen').then(({ RunConsoleScreen }) => ({ default: RunConsoleScreen })));
 const RemindersScreen = lazy(() => import('../../screens/RemindersScreen').then(({ RemindersScreen }) => ({ default: RemindersScreen })));
@@ -43,6 +44,8 @@ export const Shell: React.FC = () => {
         return <KnowledgeGraphWorkspace />;
       case 'workbench':
         return <AgentWorkbench />;
+      case 'loops':
+        return <AILoopsWorkspace />;
       case 'activity':
       case 'approvals':
         return <RunsAndApprovalsWorkspace />;

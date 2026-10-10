@@ -17,8 +17,21 @@ export interface GraphViewData {
 }
 
 const nodeColors: Record<KnowledgeGraphNode['nodeType'], string> = {
-  task: '#0075A2', course: '#536E68', file: '#71847D', project: '#2D7866',
-  person: '#8B705B', source: '#5D7891', deadline: '#996200', job: '#7A6A8D',
+  task: '#0075A2',
+  course: '#536E68',
+  file: '#BDC2BF',
+  project: '#536E68',
+  person: '#989C94',
+  source: '#71847D',
+  observation: '#996200',
+  claim: '#0075A2',
+  argument: '#536E68',
+  contradiction: '#B52B27',
+  revision: '#1D7337',
+  decision: '#0075A2',
+  conclusion: '#536E68',
+  deadline: '#996200',
+  job: '#536E68',
 };
 
 const safeMetadata = (metadata: Record<string, unknown>) => Object.fromEntries(

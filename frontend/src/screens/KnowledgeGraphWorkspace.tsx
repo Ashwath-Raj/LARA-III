@@ -9,7 +9,7 @@ import { INITIAL_ROOMS } from '../data/mockData';
 
 const ForceGraph3D = lazy(() => import('react-force-graph-3d'));
 
-function supportsWebGL() {
+export function supportsWebGL() {
   try {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
@@ -19,7 +19,7 @@ function supportsWebGL() {
   } catch { return false; }
 }
 
-interface GraphProps {
+export interface GraphProps {
   graph: ReturnType<typeof adaptPrototypeGraph>;
   selectedNode: KnowledgeGraphNode | null;
   selectedEdge: KnowledgeGraphEdge | null;
@@ -37,7 +37,7 @@ function domainEdge(edge: GraphRelation): KnowledgeGraphEdge {
     relationType: edge.relationType, roomId: edge.roomId, whyConnected: edge.whyConnected, provenance: edge.provenance };
 }
 
-function GraphCanvas({ graph, selectedNode, selectedEdge, onSelectNode, onSelectEdge, search, typeFilter, roomFilter, reducedMotion }: GraphProps) {
+export function GraphCanvas({ graph, selectedNode, selectedEdge, onSelectNode, onSelectEdge, search, typeFilter, roomFilter, reducedMotion }: GraphProps) {
   const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
   const renderedNodesRef = useRef(new Map<string, GraphRecord & { x?: number; y?: number; z?: number }>());
   const [size, setSize] = useState({ width: 680, height: 500 });
@@ -110,7 +110,7 @@ function GraphCanvas({ graph, selectedNode, selectedEdge, onSelectNode, onSelect
   </div>;
 }
 
-class GraphErrorBoundary extends Component<React.PropsWithChildren, { failed: boolean }> {
+export class GraphErrorBoundary extends Component<React.PropsWithChildren, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   componentDidCatch(_error: Error, _info: ErrorInfo) { /* The accessible list remains available below. */ }

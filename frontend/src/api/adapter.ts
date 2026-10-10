@@ -16,6 +16,7 @@ import {
   KnowledgeGraphEdge,
   ConversationMessage,
   ConversationSummary,
+  AILoopSession,
 } from '../types';
 
 import {
@@ -25,6 +26,8 @@ import {
   UpdateTaskPayload,
   ApprovalDecisionPayload,
   CreateJobPayload,
+  CreateAILoopPayload,
+  PostLoopMessagePayload,
 } from './types';
 
 export interface GraphData {
@@ -57,6 +60,12 @@ export interface UbuntuAgentApiAdapter {
 
   // Knowledge Graph operations
   getGraph(): Promise<GraphData>;
+
+  // AI Loop operations
+  listLoops(): Promise<AILoopSession[]>;
+  getLoop(loopId: string): Promise<AILoopSession | null>;
+  createLoop(payload: CreateAILoopPayload): Promise<AILoopSession>;
+  postLoopMessage(loopId: string, payload: PostLoopMessagePayload): Promise<AILoopSession>;
 
   // Conversation & Workbench
   listMessages(conversationId?: string): Promise<ConversationMessage[]>;

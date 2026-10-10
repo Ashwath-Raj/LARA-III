@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Activity, Bell, CalendarDays, CalendarRange, ChevronDown, ChevronLeft,
-  ChevronRight, FolderKanban, Inbox, LayoutGrid, LockKeyhole, Menu, Plus,
+  ChevronRight, FolderKanban, GitBranch, Inbox, LayoutGrid, LockKeyhole, Menu, Plus,
   Settings, Shield, Sparkles, X, TerminalSquare,
 } from 'lucide-react';
 import { useAgent } from '../../context/AgentContext';
@@ -11,6 +11,7 @@ import { INITIAL_PERSONAS, INITIAL_ROOMS } from '../../data/mockData';
 type NavItem = { id: ActiveScreen; label: string; icon: React.ReactNode };
 const daily: NavItem[] = [
   { id: 'workbench', label: 'Ask LARA', icon: <Sparkles size={17} /> },
+  { id: 'loops', label: 'AI Loops', icon: <GitBranch size={17} /> },
   { id: 'today', label: 'Today', icon: <CalendarRange size={17} /> },
   { id: 'inbox', label: 'Inbox', icon: <Inbox size={17} /> },
   { id: 'kanban', label: 'Kanban', icon: <LayoutGrid size={17} /> },
@@ -36,7 +37,8 @@ const groups: { title: string; items: NavItem[] }[] = [
 export const NavigationRail: React.FC = () => {
   const { activeScreen, setActiveScreen, activeRoom, setActiveRoom, activePersona,
     setActivePersona, isLeftRailCollapsed, setIsLeftRailCollapsed, tasks,
-    setIsQuickCaptureOpen, closeAllDrawers, clearRunPreview } = useAgent();
+    setIsQuickCaptureOpen, closeAllDrawers, clearRunPreview, loops, activeLoopId,
+    selectLoop, loopsLoadError, loading, requestNewLoop } = useAgent();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [roomMenu, setRoomMenu] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -60,7 +62,7 @@ export const NavigationRail: React.FC = () => {
   const navigateButton = (item: NavItem, compact = false) => {
     const selected = activeScreen === item.id;
     const label = item.label;
-    return <button key={`${item.id}-${item.label}`} className={`nav-link${selected ? ' active' : ''}${item.id === 'workbench' ? ' ask-link' : ''}`}
+    return <button key={`${item.id}-${item.label}`} className={`nav-link${selected ? ' active' : ''}${item.id === 'workbench' ? ' ask-link' : ''}${item.id === 'loops' ? ' loop-nav-link' : ''}`}
       onClick={() => go(item.id)} title={compact ? label : undefined} aria-current={selected ? 'page' : undefined}>
       <span className="nav-icon">{item.icon}</span><span className="nav-label">{label}</span>
       {item.id === 'inbox' && inboxCount > 0 && <span className="nav-count">{inboxCount}</span>}
@@ -79,7 +81,24 @@ export const NavigationRail: React.FC = () => {
         </button>
       </div>
       <div className="nav-scroll">
-        <div className="nav-primary">{daily.map((item) => navigateButton(item, isLeftRailCollapsed))}</div>
+        <div className="nav-primary">{daily.map((item) => <React.Fragment key={item.id}>
+          {navigateButton(item, isLeftRailCollapsed)}
+          {item.id === 'loops' && !isLeftRailCollapsed && <div className="nav-loop-sessions">
+            <button className="nav-loop-new" onClick={() => { requestNewLoop(); go('loops'); }}><Plus size={13} /><span>New Loop</span></button>
+            {loading ? <p className="nav-loop-state">Loading sessions…</p>
+              : loopsLoadError ? <p className="nav-loop-state nav-loop-error">Sessions unavailable</p>
+                : loops.length ? loops.map((loop) => {
+                  const status = loop.status === 'Synthesized' ? 'Completed' : loop.status === 'Failed' ? 'Failed' : loop.status === 'Cancelled' ? 'Cancelled' : loop.status === 'Awaiting User' ? 'Awaiting user' : loop.status === 'Awaiting Approval' ? 'Awaiting approval' : loop.status === 'Created' ? 'Created' : 'Active';
+                  return <button key={loop.id} className={`nav-loop-session${loop.id === activeLoopId && activeScreen === 'loops' ? ' selected' : ''}`}
+                    onClick={() => { setMobileOpen(false); go('loops'); void selectLoop(loop.id).catch((error) => console.error('Could not restore AI Loop session', error)); }}
+                    title={`${loop.name} · ${status} · ${new Date(loop.updatedAt).toLocaleString()}`}
+                    aria-current={loop.id === activeLoopId && activeScreen === 'loops' ? 'page' : undefined}>
+                    <span className={`nav-loop-indicator loop-status-${status.toLowerCase().replaceAll(' ', '-')}`} />
+                    <span className="nav-loop-session-copy"><strong>{loop.name}</strong><small>{status} · {new Date(loop.updatedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</small></span>
+                  </button>;
+                }) : <p className="nav-loop-state">No saved sessions</p>}
+          </div>}
+        </React.Fragment>)}</div>
         <div className="nav-groups">{groups.map((group) => <section className="nav-group" key={group.title}>
           {!isLeftRailCollapsed && <button className="nav-group-toggle" title={group.title} aria-expanded={!!expanded[group.title]} onClick={() => setExpanded((value) => ({ ...value, [group.title]: !value[group.title] }))}>
             <span>{group.title}</span><ChevronDown size={14} className={expanded[group.title] ? 'rotated' : ''} />

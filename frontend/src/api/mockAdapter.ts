@@ -14,6 +14,8 @@ import {
   SettingsState,
   Project,
   ConversationMessage,
+  AILoopMessage,
+  AILoopRole,
 } from '../types';
 
 import {
@@ -37,8 +39,11 @@ import {
   INITIAL_GRAPH_NODES,
   INITIAL_GRAPH_EDGES,
   INITIAL_CONVERSATION,
+  INITIAL_AI_LOOPS,
+  createDefaultAILoopParticipants,
 } from '../data/mockData';
-import { ConversationSummary } from '../types';
+import { ConversationSummary, AILoopSession } from '../types';
+import { CreateAILoopPayload, PostLoopMessagePayload } from './types';
 
 const STORAGE_KEYS = {
   TASKS: 'ubuntu_agent_tasks_v2',
@@ -50,9 +55,139 @@ const STORAGE_KEYS = {
   PROJECTS: 'ubuntu_agent_projects_v2',
   MESSAGES: 'ubuntu_agent_messages_v2',
   ACTIVE_CONVERSATION: 'lara_iv_active_conversation_v1',
+  LOOPS: 'lara_iv_ai_loops_v1',
 };
 
+
 const VALID_TASK_STATUSES: TaskStatus[] = ['inbox', 'next', 'in_progress', 'waiting', 'review', 'ready_to_submit', 'done', 'archived'];
+const AI_LOOP_ROLES: AILoopRole[] = ['red_team', 'blue_team', 'judge', 'reviewer'];
+const AI_LOOP_STATUSES = ['Created', 'Gathering', 'Debating', 'Awaiting Approval', 'Awaiting User', 'Verifying', 'Synthesized', 'Failed', 'Cancelled'];
+const AI_LOOP_CONTRIBUTION_TYPES = ['proposal', 'critique', 'counterargument', 'evidence', 'revision', 'review_finding', 'judge_decision', 'final_synthesis'];
+const AI_LOOP_ACTIVITY_STATES = ['idle', 'thinking', 'proposing', 'critiquing', 'reviewing', 'deciding'];
+const AI_LOOP_GRAPH_NODE_TYPES = ['task', 'course', 'file', 'project', 'person', 'source', 'observation', 'claim', 'argument', 'contradiction', 'revision', 'decision', 'conclusion', 'deadline', 'job'];
+const AI_LOOP_ROOMS = ['public_research', 'academic', 'projects', 'opportunities', 'operations', 'personal_vault', 'health'];
+const AI_LOOP_SENSITIVITY_LABELS = ['local_only', 'restricted', 'cloud_allowed'];
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function hasStringFields(value: Record<string, unknown>, fields: string[]): boolean {
+  return fields.every((field) => typeof value[field] === 'string');
+}
+
+function isValidDesktopContext(value: Record<string, unknown>): boolean {
+  const windows = value.windows;
+  const macroSteps = value.macroSteps;
+  const artifacts = value.gatheredArtifacts;
+  const allowedStates = ['idle', 'running', 'awaiting_approval', 'completed', 'error'];
+  const allowedWindowStatuses = ['idle', 'inspecting', 'active', 'blocked'];
+  const allowedActions = ['click', 'keypress', 'navigate', 'capture_screenshot', 'read_dom'];
+  const allowedResults = ['verified', 'completed', 'pending', 'blocked'];
+
+  return allowedStates.includes(String(value.state))
+    && (value.configuredPrompt === undefined || typeof value.configuredPrompt === 'string')
+    && (value.cancellationState === undefined || ['not_requested', 'requested', 'confirmed', 'unconfirmed'].includes(String(value.cancellationState)))
+    && (value.errorMessage === undefined || typeof value.errorMessage === 'string')
+    && Array.isArray(windows) && windows.every((window) => isObject(window)
+      && hasStringFields(window, ['windowId', 'title', 'role', 'currentObservation'])
+      && allowedWindowStatuses.includes(String(window.status))
+      && (window.lastAction === undefined || typeof window.lastAction === 'string'))
+    && Array.isArray(macroSteps) && macroSteps.every((step) => isObject(step)
+      && hasStringFields(step, ['id', 'target', 'timestamp'])
+      && Number.isInteger(step.stepNumber) && Number(step.stepNumber) > 0
+      && allowedActions.includes(String(step.action))
+      && allowedResults.includes(String(step.result))
+      && Number.isFinite(Date.parse(String(step.timestamp)))
+      && (step.screenshotRef === undefined || typeof step.screenshotRef === 'string'))
+    && Array.isArray(artifacts) && artifacts.every((artifact) => isObject(artifact)
+      && hasStringFields(artifact, ['id', 'name', 'type', 'size', 'provenance', 'excerpt']))
+    && (value.approvalRequired === undefined || (isObject(value.approvalRequired)
+      && hasStringFields(value.approvalRequired, ['action', 'target', 'risk', 'policyBasis'])));
+}
+
+function isValidSynthesis(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  return typeof value.consolidatedConclusion === 'string'
+    && Array.isArray(value.acceptedRecommendations) && value.acceptedRecommendations.every((item) => isObject(item)
+      && hasStringFields(item, ['id', 'summary', 'supportingEvidence']))
+    && Array.isArray(value.redTeamDispositions) && value.redTeamDispositions.every((item) => isObject(item)
+      && hasStringFields(item, ['objection', 'disposition', 'resolutionDetails'])
+      && ['resolved', 'accepted_risk', 'mitigated', 'open'].includes(String(item.disposition)))
+    && Array.isArray(value.reviewerFindings) && value.reviewerFindings.every((item) => isObject(item)
+      && hasStringFields(item, ['finding', 'status', 'details'])
+      && ['addressed', 'rejected_with_justification', 'open'].includes(String(item.status)))
+    && Array.isArray(value.judgeCriteria) && value.judgeCriteria.every((item) => isObject(item)
+      && hasStringFields(item, ['criterion', 'weight', 'assessment']))
+    && isStringArray(value.outstandingDisagreements)
+    && isStringArray(value.assumptionsAndUncertainties)
+    && Array.isArray(value.sourceArtifacts) && value.sourceArtifacts.every((item) => isObject(item)
+      && hasStringFields(item, ['id', 'title', 'ref'])
+      && (item.url === undefined || typeof item.url === 'string'));
+}
+
+function isStoredAILoopSession(value: unknown): value is AILoopSession {
+  if (!isObject(value)) return false;
+  const { id, constraints, status, isSimulated, messages, graphNodes, graphEdges, participants, desktopContext } = value;
+  if (!hasStringFields(value, ['id', 'name', 'objective', 'createdAt', 'updatedAt'])
+    || typeof id !== 'string' || !id.trim() || !String(value.name).trim() || !String(value.objective).trim()
+    || !isStringArray(constraints)
+    || !Number.isInteger(value.roundCount) || Number(value.roundCount) < 0
+    || !Number.isInteger(value.currentRound) || Number(value.currentRound) < 1
+    || typeof status !== 'string' || !AI_LOOP_STATUSES.includes(status) || typeof isSimulated !== 'boolean'
+    || !Array.isArray(messages) || !Array.isArray(graphNodes) || !Array.isArray(graphEdges)
+    || !isObject(participants) || !isObject(desktopContext) || !isValidDesktopContext(desktopContext)
+    || (value.synthesis !== undefined && !isValidSynthesis(value.synthesis))
+    || !Number.isFinite(Date.parse(String(value.createdAt))) || !Number.isFinite(Date.parse(String(value.updatedAt)))) return false;
+
+  if (!AI_LOOP_ROLES.every((role) => {
+    const participant = participants[role];
+    return isObject(participant) && participant.role === role
+      && hasStringFields(participant, ['name', 'title', 'description', 'configuredPrompt', 'providerModel'])
+      && isStringArray(participant.constraints)
+      && (participant.permissions === undefined || isStringArray(participant.permissions))
+      && AI_LOOP_ACTIVITY_STATES.includes(String(participant.activityState))
+      && typeof participant.isSimulated === 'boolean';
+  })) return false;
+
+  if (!messages.every((message) => isObject(message) && message.loopId === id
+    && hasStringFields(message, ['id', 'content', 'timestamp'])
+    && Number.isInteger(message.roundNumber) && Number(message.roundNumber) > 0
+    && AI_LOOP_ROLES.includes(message.role as AILoopRole)
+    && AI_LOOP_CONTRIBUTION_TYPES.includes(String(message.contributionType))
+    && typeof message.simulated === 'boolean'
+    && Number.isFinite(Date.parse(String(message.timestamp)))
+    && (message.replyToMessageId === undefined || typeof message.replyToMessageId === 'string')
+    && (message.evidenceReferences === undefined || (Array.isArray(message.evidenceReferences)
+      && message.evidenceReferences.every((reference) => isObject(reference)
+        && hasStringFields(reference, ['id', 'title', 'sourceType', 'provenance', 'excerpt'])
+        && ['benchmark', 'log', 'paper', 'file', 'code'].includes(String(reference.sourceType))
+        && (reference.url === undefined || typeof reference.url === 'string')))))) return false;
+
+  if (!graphNodes.every((node) => isObject(node) && node.loopId === id
+    && hasStringFields(node, ['id', 'displayName', 'claimSummary', 'sourceRef', 'lastUpdated'])
+    && AI_LOOP_GRAPH_NODE_TYPES.includes(String(node.nodeType))
+    && (AI_LOOP_ROLES.includes(node.roleScope as AILoopRole) || node.roleScope === 'shared')
+    && isStringArray(node.relatedMessageIds) && isStringArray(node.linkedSourceIds)
+    && AI_LOOP_ROOMS.includes(String(node.roomId))
+    && AI_LOOP_SENSITIVITY_LABELS.includes(String(node.sensitivityLabel))
+    && Number.isInteger(node.originatingRound) && Number(node.originatingRound) > 0
+    && typeof node.confidence === 'number' && Number.isFinite(node.confidence) && node.confidence >= 0 && node.confidence <= 1
+    && isObject(node.metadata)
+    && Number.isFinite(Date.parse(String(node.lastUpdated)))
+    && (node.disposition === undefined || ['accepted', 'challenged', 'refuted', 'resolved', 'open'].includes(String(node.disposition))))) return false;
+
+  const nodeIds = new Set(graphNodes.map((node) => isObject(node) ? node.id : undefined));
+  return graphEdges.every((edge) => isObject(edge) && edge.loopId === id
+    && hasStringFields(edge, ['id', 'sourceNodeId', 'targetNodeId', 'relationType', 'whyConnected', 'provenance'])
+    && (AI_LOOP_ROLES.includes(edge.roleScope as AILoopRole) || edge.roleScope === 'shared')
+    && AI_LOOP_ROOMS.includes(String(edge.roomId))
+    && nodeIds.has(edge.sourceNodeId) && nodeIds.has(edge.targetNodeId));
+}
 
 function uniqueLocalId(prefix: string) {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -75,6 +210,8 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
   private projects: Project[];
   private messages: ConversationMessage[];
   private activeConversationId: string;
+  private loops: AILoopSession[];
+  private loopStorageError: string | null = null;
   private undoStack: UndoRecord[] = [];
 
   constructor() {
@@ -85,6 +222,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
     this.auditEvents = this.loadFromStorage(STORAGE_KEYS.AUDIT, INITIAL_AUDIT_EVENTS);
     this.settings = this.loadFromStorage(STORAGE_KEYS.SETTINGS, INITIAL_SETTINGS);
     this.projects = this.loadFromStorage(STORAGE_KEYS.PROJECTS, INITIAL_PROJECTS);
+    this.loops = this.loadLoopSessions();
     const storedMessages = this.loadFromStorage<ConversationMessage[]>(STORAGE_KEYS.MESSAGES, INITIAL_CONVERSATION);
     this.messages = storedMessages.filter((message) => !['msg-01', 'msg-02'].includes(message.id));
     this.messages = this.messages.map((message) => ({
@@ -99,6 +237,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
       this.activeConversationId = this.messages.at(-1)?.conversationId || uniqueLocalId('conversation');
     }
     this.saveToStorage(STORAGE_KEYS.ACTIVE_CONVERSATION, this.activeConversationId);
+
     if (this.messages.length !== storedMessages.length) {
       this.saveToStorage(STORAGE_KEYS.MESSAGES, this.messages);
     }
@@ -112,6 +251,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
     this.auditEvents = [...INITIAL_AUDIT_EVENTS];
     this.settings = { ...INITIAL_SETTINGS };
     this.projects = [...INITIAL_PROJECTS];
+    this.loops = [...INITIAL_AI_LOOPS];
     this.messages = [...INITIAL_CONVERSATION];
     this.activeConversationId = uniqueLocalId('conversation');
     this.undoStack = [];
@@ -124,6 +264,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
     this.saveToStorage(STORAGE_KEYS.PROJECTS, this.projects);
     this.saveToStorage(STORAGE_KEYS.MESSAGES, this.messages);
     this.saveToStorage(STORAGE_KEYS.ACTIVE_CONVERSATION, this.activeConversationId);
+    this.persistLoops(this.loops);
   }
 
   private loadFromStorage<T>(key: string, fallback: T): T {
@@ -143,6 +284,36 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
     } catch {
       return false;
     }
+  }
+
+  private loadLoopSessions(): AILoopSession[] {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.LOOPS);
+      if (stored === null) return [...INITIAL_AI_LOOPS];
+      const parsed: unknown = JSON.parse(stored);
+      if (!Array.isArray(parsed) || !parsed.every(isStoredAILoopSession)) {
+        throw new Error('Saved session records do not match the AI Loops data contract.');
+      }
+      return parsed.map((loop) => ({
+        ...loop,
+        constraints: Array.isArray(loop.constraints) ? loop.constraints.filter((item) => typeof item === 'string') : [],
+      }));
+    } catch (error) {
+      this.loopStorageError = error instanceof Error
+        ? `Saved AI Loop sessions could not be read: ${error.message}`
+        : 'Saved AI Loop sessions could not be read.';
+      return [...INITIAL_AI_LOOPS];
+    }
+  }
+
+  private persistLoops(loops: AILoopSession[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LOOPS, JSON.stringify(loops));
+    } catch {
+      throw new Error('AI Loop changes could not be saved in this browser. Check browser storage and try again.');
+    }
+    this.loops = loops;
+    this.loopStorageError = null;
   }
 
   canUndo(): boolean {
@@ -587,6 +758,120 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
       edges: INITIAL_GRAPH_EDGES,
     };
   }
+
+  // AI Loop Operations
+  async listLoops(): Promise<AILoopSession[]> {
+    if (this.loopStorageError) throw new Error(this.loopStorageError);
+    return [...this.loops].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async getLoop(loopId: string): Promise<AILoopSession | null> {
+    if (this.loopStorageError) throw new Error(this.loopStorageError);
+    return this.loops.find((loop) => loop.id === loopId) || null;
+  }
+
+  async createLoop(payload: CreateAILoopPayload): Promise<AILoopSession> {
+    if (this.loopStorageError) throw new Error(this.loopStorageError);
+    const name = payload.name.trim();
+    const objective = payload.objective.trim();
+    const constraints = payload.constraints.map((constraint) => constraint.trim()).filter(Boolean);
+    if (!name || name.length > 120) throw new Error('Loop name must contain between 1 and 120 characters.');
+    if (!objective || objective.length > 6000) throw new Error('Loop objective must contain between 1 and 6000 characters.');
+    if (constraints.length > 12 || constraints.some((constraint) => constraint.length > 500)) {
+      throw new Error('Add up to 12 constraints, each no longer than 500 characters.');
+    }
+    const newLoopId = uniqueLocalId('loop');
+    const now = new Date().toISOString();
+    const newSession: AILoopSession = {
+      id: newLoopId,
+      name,
+      objective,
+      constraints,
+      status: 'Created',
+      roundCount: 0,
+      currentRound: 1,
+      createdAt: now,
+      updatedAt: now,
+      isSimulated: true,
+      participants: createDefaultAILoopParticipants(),
+      desktopContext: {
+        state: 'idle',
+        configuredPrompt: 'Inspect only explicitly approved windows. Record observations without executing actions. Stop and request approval at policy boundaries.',
+        cancellationState: 'not_requested',
+        windows: [],
+        macroSteps: [],
+        gatheredArtifacts: [],
+      },
+      messages: [],
+      graphNodes: [],
+      graphEdges: [],
+    };
+
+    this.persistLoops([newSession, ...this.loops]);
+
+    this.recordAuditEvent({
+      eventType: 'loop.session_created',
+      aggregateType: 'job',
+      aggregateId: newSession.id,
+      actor: 'user',
+      safePayload: { name, objective },
+    });
+
+    return newSession;
+  }
+
+  async postLoopMessage(loopId: string, payload: PostLoopMessagePayload): Promise<AILoopSession> {
+    if (this.loopStorageError) throw new Error(this.loopStorageError);
+    const index = this.loops.findIndex((l) => l.id === loopId);
+    if (index === -1) throw new Error(`Loop ${loopId} not found`);
+
+    const currentLoop = this.loops[index];
+    if (['Synthesized', 'Failed', 'Cancelled'].includes(currentLoop.status)) {
+      throw new Error('This loop is closed and cannot accept another contribution.');
+    }
+    if (!payload.content.trim()) throw new Error('A recorded contribution cannot be empty.');
+    if (payload.replyToMessageId && !currentLoop.messages.some((message) => message.id === payload.replyToMessageId)) {
+      throw new Error('The reply target does not belong to this loop session.');
+    }
+    const roundNumber = Math.max(currentLoop.currentRound, 1);
+    const newMsg: AILoopMessage = {
+      id: uniqueLocalId('loop-message'),
+      loopId,
+      roundNumber,
+      role: payload.role,
+      timestamp: new Date().toISOString(),
+      contributionType: payload.contributionType,
+      content: payload.content.trim(),
+      replyToMessageId: payload.replyToMessageId,
+      simulated: true,
+    };
+
+    const updatedParticipant = {
+      ...currentLoop.participants[payload.role],
+      latestContributionTime: newMsg.timestamp,
+      latestPreview: newMsg.content.slice(0, 80) + (newMsg.content.length > 80 ? '...' : ''),
+      activityState: 'idle' as const,
+    };
+
+    const updatedLoop: AILoopSession = {
+      ...currentLoop,
+      status: 'Debating',
+      roundCount: Math.max(currentLoop.roundCount, roundNumber),
+      currentRound: roundNumber,
+      updatedAt: new Date().toISOString(),
+      messages: [...currentLoop.messages, newMsg],
+      participants: {
+        ...currentLoop.participants,
+        [payload.role]: updatedParticipant,
+      },
+    };
+
+    const nextLoops = [...this.loops];
+    nextLoops[index] = updatedLoop;
+    this.persistLoops(nextLoops);
+    return updatedLoop;
+  }
+
 
   // Conversation & Workbench
   async listMessages(conversationId = this.activeConversationId): Promise<ConversationMessage[]> {

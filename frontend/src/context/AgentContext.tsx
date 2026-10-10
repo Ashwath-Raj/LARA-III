@@ -29,13 +29,18 @@ import {
   KnowledgeGraphEdge,
   ConversationMessage,
   ConversationSummary,
+  AILoopSession,
+  AILoopRole,
+  AILoopContributionType,
 } from '../types';
+
 
 import {
   CreateTaskPayload,
   UpdateTaskPayload,
   TaskCaptureCandidate,
   CreateJobPayload,
+  CreateAILoopPayload,
 } from '../api/types';
 
 import { MockUbuntuAgentApi } from '../api/mockAdapter';
@@ -98,6 +103,14 @@ interface AgentContextType {
   messages: ConversationMessage[];
   conversations: ConversationSummary[];
   activeConversationId: string;
+  loops: AILoopSession[];
+  activeLoopId: string;
+  selectedLoopParticipantRole: AILoopRole | null;
+  setSelectedLoopParticipantRole: (role: AILoopRole | null) => void;
+  loopsLoadError: string | null;
+  newLoopRequested: boolean;
+  requestNewLoop: () => void;
+  clearNewLoopRequest: () => void;
   loading: boolean;
   graphLoadError: string | null;
   canUndo: boolean;
@@ -121,7 +134,12 @@ interface AgentContextType {
   createConversation: () => Promise<void>;
   selectConversation: (conversationId: string) => Promise<void>;
 
+  createLoop: (payload: CreateAILoopPayload) => Promise<AILoopSession>;
+  postLoopMessage: (loopId: string, role: AILoopRole, content: string, type?: AILoopContributionType, replyToId?: string) => Promise<AILoopSession>;
+  selectLoop: (loopId: string) => Promise<AILoopSession>;
+
   decideApproval: (approvalId: string, decision: 'approve' | 'reject') => Promise<ApprovalRequest>;
+
 
   createJob: (payload: CreateJobPayload) => Promise<AgentJob>;
   pauseJob: (jobId: string) => Promise<AgentJob>;
@@ -176,6 +194,11 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState('');
+  const [loops, setLoops] = useState<AILoopSession[]>([]);
+  const [activeLoopId, setActiveLoopId] = useState<string>('');
+  const [selectedLoopParticipantRole, setSelectedLoopParticipantRole] = useState<AILoopRole | null>(null);
+  const [loopsLoadError, setLoopsLoadError] = useState<string | null>(null);
+  const [newLoopRequested, setNewLoopRequested] = useState(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [graphLoadError, setGraphLoadError] = useState<string | null>(null);
   const [canUndoState, setCanUndoState] = useState<boolean>(false);
@@ -259,6 +282,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setConversations(conversationList);
       setActiveConversationId(m[0]?.conversationId || await api.createConversation());
       setCanUndoState(api.canUndo());
+      try {
+        const loopList = await api.listLoops();
+        setLoops(loopList);
+        setLoopsLoadError(null);
+        setActiveLoopId((current) => loopList.some((item) => item.id === current) ? current : loopList[0]?.id || '');
+      } catch (error) {
+        setLoopsLoadError(error instanceof Error ? error.message : 'AI Loop sessions could not be loaded.');
+      }
     } catch (err) {
       setGraphLoadError('The browser demo could not load graph records.');
       console.error('Error loading initial agent state', err);
@@ -266,6 +297,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setLoading(false);
     }
   }, [api]);
+
 
   useEffect(() => {
     refreshAll();
@@ -442,6 +474,53 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setMessages(await api.listMessages(conversationId));
   }, [api]);
 
+  const createLoop = useCallback(async (payload: CreateAILoopPayload) => {
+    const created = await api.createLoop(payload);
+    setLoops((previous) => [created, ...previous]);
+    setActiveLoopId(created.id);
+    setSelectedLoopParticipantRole(null);
+    setLoopsLoadError(null);
+    setActiveScreen('loops');
+    return created;
+  }, [api]);
+
+  const requestNewLoop = useCallback(() => setNewLoopRequested(true), []);
+  const clearNewLoopRequest = useCallback(() => setNewLoopRequested(false), []);
+
+  const postLoopMessage = useCallback(async (
+    loopId: string,
+    role: AILoopRole,
+    content: string,
+    type: AILoopContributionType = 'proposal',
+    replyToId?: string,
+  ) => {
+    const updated = await api.postLoopMessage(loopId, {
+      role,
+      content,
+      contributionType: type,
+      replyToMessageId: replyToId,
+    });
+    setLoops((previous) => previous.map((loop) => loop.id === loopId ? updated : loop));
+    return updated;
+  }, [api]);
+
+  const selectLoop = useCallback(async (loopId: string) => {
+    try {
+      const existing = loops.find((loop) => loop.id === loopId);
+      const session = existing || await api.getLoop(loopId);
+      if (!session) throw new Error('The selected AI Loop session could not be found.');
+      if (!existing) setLoops((previous) => [session, ...previous]);
+      setActiveLoopId(session.id);
+      setSelectedLoopParticipantRole(null);
+      setActiveScreen('loops');
+      setLoopsLoadError(null);
+      return session;
+    } catch (error) {
+      setLoopsLoadError(error instanceof Error ? error.message : 'The AI Loop session could not be loaded.');
+      throw error;
+    }
+  }, [api, loops]);
+
   const decideApproval = useCallback(
     async (approvalId: string, decision: 'approve' | 'reject') => {
       const decided = await api.decideApproval(approvalId, { decision });
@@ -572,6 +651,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         activeConversationId,
         loading,
         graphLoadError,
+        loops,
+        activeLoopId,
+        selectedLoopParticipantRole,
+        setSelectedLoopParticipantRole,
+        loopsLoadError,
+        newLoopRequested,
+        requestNewLoop,
+        clearNewLoopRequest,
         canUndo: canUndoState,
         captureTask,
         createTask,
@@ -588,6 +675,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sendMessage,
         createConversation,
         selectConversation,
+        createLoop,
+        postLoopMessage,
+        selectLoop,
         decideApproval,
         createJob,
         pauseJob,

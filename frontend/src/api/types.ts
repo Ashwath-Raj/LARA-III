@@ -120,3 +120,24 @@ export const UNAVAILABLE_GOOGLE_CALENDAR: CalendarIntegrationState = {
   status: 'not_configured',
   available: false,
 };
+
+export interface CreateAILoopPayload {
+  name: string;
+  objective: string;
+  constraints: string[];
+}
+
+export interface PostLoopMessagePayload {
+  role: 'red_team' | 'blue_team' | 'judge' | 'reviewer';
+  content: string;
+  contributionType:
+    | 'proposal'
+    | 'critique'
+    | 'counterargument'
+    | 'evidence'
+    | 'revision'
+    | 'review_finding'
+    | 'judge_decision'
+    | 'final_synthesis';
+  replyToMessageId?: string;
+}

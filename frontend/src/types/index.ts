@@ -285,6 +285,13 @@ export type GraphNodeType =
   | 'project'
   | 'person'
   | 'source'
+  | 'observation'
+  | 'claim'
+  | 'argument'
+  | 'contradiction'
+  | 'revision'
+  | 'decision'
+  | 'conclusion'
   | 'deadline'
   | 'job';
 
@@ -335,14 +342,182 @@ export interface ConversationSummary {
   messageCount: number;
 }
 
+// AI Loop Domain Models
+export type AILoopRole = 'red_team' | 'blue_team' | 'judge' | 'reviewer';
+
+export type AILoopContributionType =
+  | 'proposal'
+  | 'critique'
+  | 'counterargument'
+  | 'evidence'
+  | 'revision'
+  | 'review_finding'
+  | 'judge_decision'
+  | 'final_synthesis';
+
+export interface AILoopParticipant {
+  role: AILoopRole;
+  name: string;
+  title: string;
+  description: string;
+  configuredPrompt: string;
+  constraints: string[];
+  permissions?: string[];
+  providerModel: string;
+  isSimulated: boolean;
+  activityState: 'idle' | 'thinking' | 'proposing' | 'critiquing' | 'reviewing' | 'deciding';
+  latestContributionTime?: string;
+  latestPreview?: string;
+}
+
+export interface AILoopMessage {
+  id: string;
+  loopId: string;
+  roundNumber: number;
+  role: AILoopRole;
+  timestamp: string;
+  contributionType: AILoopContributionType;
+  content: string;
+  replyToMessageId?: string;
+  evidenceReferences?: Array<{
+    id: string;
+    title: string;
+    sourceType: 'benchmark' | 'log' | 'paper' | 'file' | 'code';
+    provenance: string;
+    excerpt: string;
+    url?: string;
+  }>;
+  simulated: boolean;
+}
+
+export interface DesktopOperatorWindow {
+  windowId: string;
+  title: string;
+  role: string;
+  status: 'idle' | 'inspecting' | 'active' | 'blocked';
+  currentObservation: string;
+  lastAction?: string;
+}
+
+export interface DesktopOperatorMacroStep {
+  id: string;
+  stepNumber: number;
+  action: 'click' | 'keypress' | 'navigate' | 'capture_screenshot' | 'read_dom';
+  target: string;
+  result: 'verified' | 'completed' | 'pending' | 'blocked';
+  timestamp: string;
+  screenshotRef?: string;
+}
+
+export interface DesktopOperatorContext {
+  state: 'idle' | 'running' | 'awaiting_approval' | 'completed' | 'error';
+  configuredPrompt?: string;
+  cancellationState?: 'not_requested' | 'requested' | 'confirmed' | 'unconfirmed';
+  errorMessage?: string;
+  windows: DesktopOperatorWindow[];
+  macroSteps: DesktopOperatorMacroStep[];
+  gatheredArtifacts: Array<{
+    id: string;
+    name: string;
+    type: string;
+    size: string;
+    provenance: string;
+    excerpt: string;
+  }>;
+  approvalRequired?: {
+    action: string;
+    target: string;
+    risk: string;
+    policyBasis: string;
+  };
+}
+
+export interface AILoopGraphNode extends KnowledgeGraphNode {
+  loopId: string;
+  roleScope: AILoopRole | 'shared';
+  claimSummary: string;
+  originatingRound: number;
+  relatedMessageIds: string[];
+  linkedSourceIds: string[];
+  disposition?: 'accepted' | 'challenged' | 'refuted' | 'resolved' | 'open';
+}
+
+export interface AILoopGraphEdge extends KnowledgeGraphEdge {
+  loopId: string;
+  roleScope: AILoopRole | 'shared';
+}
+
+export interface AILoopSynthesis {
+  consolidatedConclusion: string;
+  acceptedRecommendations: Array<{
+    id: string;
+    summary: string;
+    supportingEvidence: string;
+  }>;
+  redTeamDispositions: Array<{
+    objection: string;
+    disposition: 'resolved' | 'accepted_risk' | 'mitigated' | 'open';
+    resolutionDetails: string;
+  }>;
+  reviewerFindings: Array<{
+    finding: string;
+    status: 'addressed' | 'rejected_with_justification' | 'open';
+    details: string;
+  }>;
+  judgeCriteria: Array<{
+    criterion: string;
+    weight: string;
+    assessment: string;
+  }>;
+  outstandingDisagreements: string[];
+  assumptionsAndUncertainties: string[];
+  sourceArtifacts: Array<{
+    id: string;
+    title: string;
+    ref: string;
+    url?: string;
+  }>;
+}
+
+export type AILoopStatus =
+  | 'Created'
+  | 'Gathering'
+  | 'Debating'
+  | 'Awaiting Approval'
+  | 'Awaiting User'
+  | 'Verifying'
+  | 'Synthesized'
+  | 'Failed'
+  | 'Cancelled';
+
+export interface AILoopSession {
+  id: string;
+  name: string;
+  objective: string;
+  constraints: string[];
+  status: AILoopStatus;
+  roundCount: number;
+  currentRound: number;
+  createdAt: string;
+  updatedAt: string;
+  participants: Record<AILoopRole, AILoopParticipant>;
+  messages: AILoopMessage[];
+  desktopContext: DesktopOperatorContext;
+  graphNodes: AILoopGraphNode[];
+  graphEdges: AILoopGraphEdge[];
+  synthesis?: AILoopSynthesis;
+  isSimulated: boolean;
+}
+
 export type ActiveScreen =
+  | 'workbench'
+  | 'loops'
   | 'today'
   | 'inbox'
   | 'kanban'
   | 'calendar'
   | 'projects'
   | 'graph'
-  | 'workbench'
   | 'run_console'
   | 'reminders'
   | 'rooms'

@@ -506,6 +506,32 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
+.nav-link.loop-nav-link { margin-top: 1px; color: #f3f4ed; font-weight: 620; }
+.nav-link.loop-nav-link .nav-icon { color: #c0d9d6; }
+.nav-loop-sessions { display: grid; gap: 2px; margin: 3px 0 5px 29px; }
+.nav-loop-new,
+.nav-loop-session { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px 7px; border-radius: 5px; color: #bdc5c0; text-align: left; }
+.nav-loop-new { color: #dce5de; font-size: 10px; }
+.nav-loop-new:hover,
+.nav-loop-session:hover,
+.nav-loop-session.selected { color: #fff; background: rgba(255,255,255,.07); }
+.nav-loop-new svg { flex: 0 0 auto; color: #c0d9d6; }
+.nav-loop-session { gap: 6px; }
+.nav-loop-indicator { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 2px; background: #95a19b; }
+.nav-loop-indicator.loop-status-active,
+.nav-loop-indicator.loop-status-created { background: #91bdb3; }
+.nav-loop-indicator.loop-status-awaiting-user,
+.nav-loop-indicator.loop-status-awaiting-approval { background: #c2a76d; }
+.nav-loop-indicator.loop-status-completed { background: #8caf99; }
+.nav-loop-indicator.loop-status-failed,
+.nav-loop-indicator.loop-status-cancelled { background: #bd817a; }
+.nav-loop-session-copy { display: grid; min-width: 0; gap: 2px; }
+.nav-loop-session-copy strong { overflow: hidden; color: inherit; font-size: 9px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.nav-loop-session-copy small { overflow: hidden; color: #9ca9a4; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.nav-loop-state { padding: 5px 7px; color: #9ca9a4; font-size: 8px; }
+.nav-loop-error { color: #dbb09e; }
+.u-sidebar.collapsed .nav-loop-sessions { display: none; }
+
 /* LARA IV shell and Ask LARA workspace */
 :root {
   --app-canvas: #E9EBE7;
