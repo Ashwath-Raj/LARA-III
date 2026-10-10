@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Activity, Bell, CalendarDays, CalendarRange, ChevronDown, ChevronLeft,
   ChevronRight, FolderKanban, Inbox, LayoutGrid, LockKeyhole, Menu, Plus,
-  Settings, Shield, Sparkles, X,
+  Settings, Shield, Sparkles, X, TerminalSquare,
 } from 'lucide-react';
 import { useAgent } from '../../context/AgentContext';
 import { ActiveScreen } from '../../types';
@@ -23,6 +23,7 @@ const groups: { title: string; items: NavItem[] }[] = [
     { id: 'graph', label: 'Knowledge graph', icon: <Activity size={16} /> },
   ] },
   { title: 'Operations & Governance', items: [
+    { id: 'run_console', label: 'Run console', icon: <TerminalSquare size={16} /> },
     { id: 'activity', label: 'Activity & runs', icon: <Activity size={16} /> },
     { id: 'approvals', label: 'Approvals', icon: <Shield size={16} /> },
     { id: 'rooms', label: 'Rooms & policy', icon: <LockKeyhole size={16} /> },
@@ -35,7 +36,7 @@ const groups: { title: string; items: NavItem[] }[] = [
 export const NavigationRail: React.FC = () => {
   const { activeScreen, setActiveScreen, activeRoom, setActiveRoom, activePersona,
     setActivePersona, isLeftRailCollapsed, setIsLeftRailCollapsed, tasks,
-    setIsQuickCaptureOpen } = useAgent();
+    setIsQuickCaptureOpen, closeAllDrawers, clearRunPreview } = useAgent();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [roomMenu, setRoomMenu] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -48,7 +49,14 @@ export const NavigationRail: React.FC = () => {
   }, []);
   const currentRoom = INITIAL_ROOMS.find((room) => room.id === activeRoom);
   const inboxCount = tasks.filter((task) => task.status === 'inbox').length;
-  const go = (id: ActiveScreen) => { setActiveScreen(id); setMobileOpen(false); };
+  const go = (id: ActiveScreen) => {
+    if (id === 'run_console') {
+      closeAllDrawers();
+      clearRunPreview();
+    }
+    setActiveScreen(id);
+    setMobileOpen(false);
+  };
   const navigateButton = (item: NavItem, compact = false) => {
     const selected = activeScreen === item.id;
     const label = item.label;

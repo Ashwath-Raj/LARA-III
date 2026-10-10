@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Cpu, Shield, Bell, CheckCircle2, Server, Moon } from 'lucide-react';
+import { Cpu, Shield, Bell, CalendarDays, CheckCircle2, Server, Moon } from 'lucide-react';
 
 import { useAgent } from '../context/AgentContext';
+import { UNAVAILABLE_GOOGLE_CALENDAR } from '../api/types';
 
 export const SettingsScreen: React.FC = () => {
   const { settings, updateSettings, resetDemoData } = useAgent();
@@ -332,6 +333,25 @@ export const SettingsScreen: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <section className="u-card calendar-integration-card" aria-labelledby="calendar-integration-title">
+        <header className="calendar-integration-heading">
+          <div><CalendarDays size={18} /><div><h2 id="calendar-integration-title">Google Calendar</h2><p>Account connection and event sync</p></div></div>
+          <span className="calendar-connection-state">{UNAVAILABLE_GOOGLE_CALENDAR.status.replace(/_/g, ' ')}</span>
+        </header>
+        <p className="calendar-connection-copy"><strong>Not configured.</strong> This browser demo has no Google Calendar connector, OAuth session, account identity, or successful sync history.</p>
+        <dl className="calendar-connection-details">
+          <div><dt>Account</dt><dd>None connected</dd></div>
+          <div><dt>Last successful sync</dt><dd>None recorded</dd></div>
+          <div><dt>Connection availability</dt><dd>Unavailable until a trusted backend is configured</dd></div>
+        </dl>
+        <div className="calendar-connection-actions">
+          <button type="button" className="u-btn u-btn-primary" disabled title="A server-side Calendar connector is not configured">Connect Google Calendar</button>
+          <button type="button" className="u-btn u-btn-secondary" disabled>Sync now</button>
+          <button type="button" className="u-btn u-btn-secondary" disabled>Disconnect</button>
+        </div>
+        <p className="calendar-connection-note">Before enabling these controls, implement the backend OAuth callback, encrypted token storage and revocation, principal-scoped event access, explicit scope consent, sync status/error reporting, and idempotent event synchronization. No token or connection state is stored in this browser.</p>
+      </section>
 
       {/* Save Button */}
       <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginTop: '8px' }}>

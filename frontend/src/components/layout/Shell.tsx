@@ -15,6 +15,7 @@ const ProjectsWorkspace = lazy(() => import('../../screens/ProjectsWorkspace').t
 const KnowledgeGraphWorkspace = lazy(() => import('../../screens/KnowledgeGraphWorkspace').then(({ KnowledgeGraphWorkspace }) => ({ default: KnowledgeGraphWorkspace })));
 const AgentWorkbench = lazy(() => import('../../screens/AgentWorkbench').then(({ AgentWorkbench }) => ({ default: AgentWorkbench })));
 const RunsAndApprovalsWorkspace = lazy(() => import('../../screens/RunsAndApprovalsWorkspace').then(({ RunsAndApprovalsWorkspace }) => ({ default: RunsAndApprovalsWorkspace })));
+const RunConsoleScreen = lazy(() => import('../../screens/RunConsoleScreen').then(({ RunConsoleScreen }) => ({ default: RunConsoleScreen })));
 const RemindersScreen = lazy(() => import('../../screens/RemindersScreen').then(({ RemindersScreen }) => ({ default: RemindersScreen })));
 const RoomsScreen = lazy(() => import('../../screens/RoomsScreen').then(({ RoomsScreen }) => ({ default: RoomsScreen })));
 const SettingsScreen = lazy(() => import('../../screens/SettingsScreen').then(({ SettingsScreen }) => ({ default: SettingsScreen })));
@@ -45,6 +46,8 @@ export const Shell: React.FC = () => {
       case 'activity':
       case 'approvals':
         return <RunsAndApprovalsWorkspace />;
+      case 'run_console':
+        return <RunConsoleScreen />;
       case 'reminders':
         return <RemindersScreen />;
       case 'rooms':

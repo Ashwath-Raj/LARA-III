@@ -343,6 +343,7 @@ export type ActiveScreen =
   | 'projects'
   | 'graph'
   | 'workbench'
+  | 'run_console'
   | 'reminders'
   | 'rooms'
   | 'activity'

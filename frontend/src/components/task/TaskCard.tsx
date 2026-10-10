@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Calendar,
   Clock,
@@ -28,6 +28,7 @@ const STATUS_LANES: TaskStatus[] = [
   'review',
   'ready_to_submit',
   'done',
+  'archived',
 ];
 
 export const TaskCard: React.FC<TaskCardProps> = ({
@@ -36,6 +37,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   showMoveControls = false,
 }) => {
   const { transitionTask, openTaskDetail } = useAgent();
+  const [moveError, setMoveError] = useState('');
 
   const handleCardClick = () => {
     if (onOpenDetail) onOpenDetail(task);
@@ -44,17 +46,26 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
   const currentIdx = STATUS_LANES.indexOf(task.status);
 
+  const moveToStatus = async (status: TaskStatus) => {
+    setMoveError('');
+    try {
+      await transitionTask(task.id, status);
+    } catch {
+      setMoveError('Move not saved. The task remains in its current lane.');
+    }
+  };
+
   const handleMoveLeft = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (currentIdx > 0) {
-      transitionTask(task.id, STATUS_LANES[currentIdx - 1]);
+      void moveToStatus(STATUS_LANES[currentIdx - 1]);
     }
   };
 
   const handleMoveRight = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (currentIdx < STATUS_LANES.length - 1) {
-      transitionTask(task.id, STATUS_LANES[currentIdx + 1]);
+      void moveToStatus(STATUS_LANES[currentIdx + 1]);
     }
   };
 
@@ -80,7 +91,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
+        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
           handleCardClick();
         }
       }}
@@ -271,6 +282,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           )}
         </div>
       </div>
+      {moveError && <p className="task-move-error" role="alert">{moveError}</p>}
     </div>
   );
 };

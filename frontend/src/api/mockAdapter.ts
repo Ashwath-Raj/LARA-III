@@ -52,6 +52,8 @@ const STORAGE_KEYS = {
   ACTIVE_CONVERSATION: 'lara_iv_active_conversation_v1',
 };
 
+const VALID_TASK_STATUSES: TaskStatus[] = ['inbox', 'next', 'in_progress', 'waiting', 'review', 'ready_to_submit', 'done', 'archived'];
+
 function uniqueLocalId(prefix: string) {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   return `${prefix}-${random}`;
@@ -364,6 +366,9 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
   }
 
   async transitionTask(taskId: string, targetStatus: TaskStatus): Promise<Task> {
+    if (!VALID_TASK_STATUSES.includes(targetStatus)) {
+      throw new Error(`Invalid task status: ${String(targetStatus)}`);
+    }
     const index = this.tasks.findIndex((t) => t.id === taskId);
     if (index === -1) {
       throw new Error(`Task ${taskId} not found`);
@@ -371,6 +376,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
 
     const previous = [...this.tasks];
     const prevStatus = this.tasks[index].status;
+    if (prevStatus === targetStatus) return this.tasks[index];
     this.tasks[index] = {
       ...this.tasks[index],
       status: targetStatus,
@@ -383,7 +389,11 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
       previousTasks: previous,
     });
 
-    this.saveToStorage(STORAGE_KEYS.TASKS, this.tasks);
+    if (!this.saveToStorage(STORAGE_KEYS.TASKS, this.tasks)) {
+      this.tasks = previous;
+      this.undoStack.pop();
+      throw new Error('Task status could not be persisted to browser storage');
+    }
 
     this.recordAuditEvent({
       eventType: 'task.transitioned',
@@ -397,14 +407,20 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
   }
 
   async reorderTasks(sourceIndex: number, destinationIndex: number, status: TaskStatus): Promise<Task[]> {
+    if (!VALID_TASK_STATUSES.includes(status)) throw new Error(`Invalid task status: ${String(status)}`);
     const previous = [...this.tasks];
     const laneTasks = this.tasks.filter((t) => t.status === status);
     const otherTasks = this.tasks.filter((t) => t.status !== status);
+    if (!Number.isInteger(sourceIndex) || !Number.isInteger(destinationIndex)
+      || sourceIndex < 0 || sourceIndex >= laneTasks.length
+      || destinationIndex < 0 || destinationIndex >= laneTasks.length) {
+      throw new Error('Task reorder indexes are outside the selected lane');
+    }
+    if (sourceIndex === destinationIndex) return [...this.tasks];
 
     const [moved] = laneTasks.splice(sourceIndex, 1);
-    if (moved) {
-      laneTasks.splice(destinationIndex, 0, moved);
-    }
+    if (!moved) throw new Error('Task could not be found in the selected lane');
+    laneTasks.splice(destinationIndex, 0, moved);
 
     this.undoStack.push({
       type: 'task_reorder',
@@ -413,7 +429,11 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
     });
 
     this.tasks = [...laneTasks, ...otherTasks];
-    this.saveToStorage(STORAGE_KEYS.TASKS, this.tasks);
+    if (!this.saveToStorage(STORAGE_KEYS.TASKS, this.tasks)) {
+      this.tasks = previous;
+      this.undoStack.pop();
+      throw new Error('Task order could not be persisted to browser storage');
+    }
     return [...this.tasks];
   }
 

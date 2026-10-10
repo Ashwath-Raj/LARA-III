@@ -46,6 +46,9 @@ interface AgentContextType {
   // Navigation & Workspace Shell
   activeScreen: ActiveScreen;
   setActiveScreen: (screen: ActiveScreen) => void;
+  runConsolePreviewGoal: string | null;
+  openRunPreview: (goal: string) => void;
+  clearRunPreview: () => void;
   activeRoom: KnowledgeRoom;
   setActiveRoom: (room: KnowledgeRoom) => void;
   activePersona: PersonaId;
@@ -142,6 +145,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Shell Layout
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>('workbench');
+  const [runConsolePreviewGoal, setRunConsolePreviewGoal] = useState<string | null>(null);
   const [activeRoom, setActiveRoom] = useState<KnowledgeRoom>('operations');
   const [activePersona, setActivePersona] = useState<PersonaId>('task_manager');
   const [isLeftRailCollapsed, setIsLeftRailCollapsed] = useState<boolean>(false);
@@ -180,10 +184,10 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const activeDrawerType: DrawerType = useMemo(() => {
     if (selectedTask) return 'task';
     if (selectedGraphNode) return 'node';
-    if (selectedJob) return 'job';
+    if (selectedJob && activeScreen !== 'run_console') return 'job';
     if (selectedApproval) return 'approval';
     return 'none';
-  }, [selectedTask, selectedGraphNode, selectedJob, selectedApproval]);
+  }, [activeScreen, selectedTask, selectedGraphNode, selectedJob, selectedApproval]);
 
   const closeAllDrawers = useCallback(() => {
     setSelectedTask(null);
@@ -210,6 +214,16 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     closeAllDrawers();
     setSelectedJob(job);
   }, [closeAllDrawers]);
+
+  const openRunPreview = useCallback((goal: string) => {
+    const cleanGoal = goal.trim();
+    if (!cleanGoal) return;
+    closeAllDrawers();
+    setRunConsolePreviewGoal(cleanGoal);
+    setActiveScreen('run_console');
+  }, [closeAllDrawers]);
+
+  const clearRunPreview = useCallback(() => setRunConsolePreviewGoal(null), []);
 
   const openApprovalDetail = useCallback((app: ApprovalRequest) => {
     closeAllDrawers();
@@ -514,6 +528,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       value={{
         activeScreen,
         setActiveScreen,
+        runConsolePreviewGoal,
+        openRunPreview,
+        clearRunPreview,
         activeRoom,
         setActiveRoom,
         activePersona,

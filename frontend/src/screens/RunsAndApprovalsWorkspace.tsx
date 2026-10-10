@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Activity,
   FileCheck2,
@@ -16,11 +16,19 @@ export const RunsAndApprovalsWorkspace: React.FC = () => {
     auditEvents,
     decideApproval,
     openApprovalDetail,
-    openJobDetail,
+    activeScreen,
+    setActiveScreen,
+    setSelectedJob,
+    closeAllDrawers,
+    clearRunPreview,
   } = useAgent();
 
-  const [activeTab, setActiveTab] = useState<'approvals' | 'jobs' | 'audit'>('approvals');
+  const [activeTab, setActiveTab] = useState<'approvals' | 'jobs' | 'audit'>(activeScreen === 'activity' ? 'jobs' : 'approvals');
   const [selectedAuditFilter] = useState('all');
+
+  useEffect(() => {
+    setActiveTab(activeScreen === 'activity' ? 'jobs' : 'approvals');
+  }, [activeScreen]);
 
   const pendingApprovals = approvals.filter((a) => a.status === 'pending');
 
@@ -50,7 +58,7 @@ export const RunsAndApprovalsWorkspace: React.FC = () => {
       }}
     >
       {/* Top Tab Bar */}
-      <div
+      <div className="operations-workspace"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -59,7 +67,7 @@ export const RunsAndApprovalsWorkspace: React.FC = () => {
           paddingBottom: '12px',
         }}
       >
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div className="operations-tabs" style={{ display: 'flex', gap: '8px' }}>
           <button
             onClick={() => setActiveTab('approvals')}
             style={{
@@ -178,6 +186,16 @@ export const RunsAndApprovalsWorkspace: React.FC = () => {
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                     Target: <code style={{ fontFamily: 'var(--font-mono)' }}>{app.targetResource}</code>
                   </div>
+                  <dl className="approval-summary-grid">
+                    <div><dt>Destination</dt><dd>{app.destination}</dd></div>
+                    <div><dt>Leaves this device</dt><dd>{app.leavesMachine ? 'Yes' : 'No'}</dd></div>
+                    <div><dt>Reversibility</dt><dd>{app.reversibility}</dd></div>
+                    <div><dt>Expires</dt><dd><time dateTime={app.expiresAt}>{new Date(app.expiresAt).toLocaleString()}</time></dd></div>
+                  </dl>
+                  <details className="approval-arguments-preview" open>
+                    <summary>Exact proposed arguments</summary>
+                    <pre>{JSON.stringify(app.normalizedArguments, null, 2)}</pre>
+                  </details>
 
                   <div
                     style={{
@@ -204,7 +222,7 @@ export const RunsAndApprovalsWorkspace: React.FC = () => {
                         cursor: 'pointer',
                       }}
                     >
-                      {app.specificButtonLabel || 'Approve Action'}
+                      Simulate: {app.specificButtonLabel || 'Approve Action'}
                     </button>
                     <button
                       onClick={() => requestApprovalDecision(app.id, 'reject')}
@@ -218,7 +236,7 @@ export const RunsAndApprovalsWorkspace: React.FC = () => {
                         cursor: 'pointer',
                       }}
                     >
-                      Reject
+                      Record demo rejection
                     </button>
                     <button
                       onClick={() => openApprovalDetail(app)}
@@ -263,7 +281,10 @@ export const RunsAndApprovalsWorkspace: React.FC = () => {
           {jobs.map((job) => (
             <div
               key={job.id}
-              onClick={() => openJobDetail(job)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); closeAllDrawers(); clearRunPreview(); setSelectedJob(job); setActiveScreen('run_console'); } }}
+              onClick={() => { closeAllDrawers(); clearRunPreview(); setSelectedJob(job); setActiveScreen('run_console'); }}
               style={{
                 backgroundColor: 'var(--surface-primary)',
                 borderRadius: '8px',

@@ -1,6 +1,6 @@
 # LARA IV frontend
 
-LARA IV is a browser-local productivity workspace prototype. Ask LARA is the starting screen; Today, Inbox, Kanban, Calendar, Reminders, Projects & Memory, and Operations & Governance remain available in the sidebar.
+LARA IV is a browser-local productivity workspace prototype. Ask LARA is the starting screen; Today, Inbox, Kanban, Calendar, Reminders, Projects & Memory, Run Console, and Operations & Governance remain available in the sidebar.
 
 ## Run locally
 
@@ -19,6 +19,8 @@ npm run lint
 ## Prototype boundary
 
 The UI uses a typed mock adapter and browser storage. Conversation responses are static demo copy. There is no connected model provider, backend API, operating-system integration, or external tool execution. Task, reminder, approval, and settings actions modify browser-local demo data only.
+
+Run Console is a read-only inspector for sample records and a proposed-request preview; it does not start, pause, resume, cancel, or retry a real job. Google Calendar is typed as a future connector boundary but is currently not configured. OAuth, calendar sync, and external event operations are not available. See `Docs/06_API_CONTRACT.md` for backend prerequisites.
 
 Conversation history is grouped by stable conversation IDs. Existing flat browser message arrays migrate into one legacy conversation in memory; the two known seeded demo message IDs are the only messages omitted. Starting a conversation does not clear older threads.
 

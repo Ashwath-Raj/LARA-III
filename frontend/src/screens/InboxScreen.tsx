@@ -36,6 +36,7 @@ export const InboxScreen: React.FC = () => {
   const [showAddNote, setShowAddNote] = useState(false);
   const [noteTitle, setNoteTitle] = useState('');
   const [noteCategory, setNoteCategory] = useState<TaskCategory>('Personal/Admin');
+  const [noteError, setNoteError] = useState('');
 
   // Filter tasks in inbox state, or all tasks matching query
   const inboxTasks = tasks.filter((t) => {
@@ -61,22 +62,27 @@ export const InboxScreen: React.FC = () => {
 
   const handleCreateNote = async () => {
     if (!noteTitle.trim()) return;
-    await createTask({
-      title: noteTitle,
-      category: noteCategory,
-      room: 'operations',
-      priority: 'medium',
-      isSticky: true,
-      stickyColor: 'beige',
-      nextAction: 'Triage note or assign to project.',
-    });
-    setNoteTitle('');
-    setShowAddNote(false);
+    setNoteError('');
+    try {
+      await createTask({
+        title: noteTitle,
+        category: noteCategory,
+        room: 'operations',
+        priority: 'medium',
+        isSticky: true,
+        stickyColor: 'beige',
+        nextAction: 'Triage note or assign to project.',
+      });
+      setNoteTitle('');
+      setShowAddNote(false);
+    } catch {
+      setNoteError('The note was not saved. Your title is still here; check browser storage and try again.');
+    }
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      {/* Category Filter Pills & Actions */}
+    <div className="u-workspace-scroll inbox-workspace" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      {/* Compact filters and actions */}
       <div className="inbox-toolbar"
         style={{
           display: 'flex',
@@ -86,43 +92,11 @@ export const InboxScreen: React.FC = () => {
           gap: '12px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <span
-            style={{
-              fontSize: '11px',
-              fontWeight: 700,
-              color: 'var(--text-muted)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              marginRight: '4px',
-            }}
-          >
-            Category:
-          </span>
-          {CATEGORIES.map((cat) => {
-            const isSelected = selectedCat === cat;
-            return (
-              <button
-                key={cat}
-                onClick={() => setSelectedCat(cat)}
-                style={{
-                  padding: '4px 10px',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '12px',
-                  fontWeight: isSelected ? 650 : 500,
-                  backgroundColor: isSelected ? 'var(--cerulean)' : 'var(--surface-primary)',
-                  color: isSelected ? '#FFFFFF' : 'var(--text-primary)',
-                  border: isSelected ? '1px solid var(--cerulean)' : '1px solid var(--border-subtle)',
-                  transition: 'all 0.12s ease',
-                }}
-              >
-                {cat === 'all' ? 'All Categories' : cat}
-              </button>
-            );
-          })}
-        </div>
-
         <div className="inbox-controls">
+          <input className="inbox-search" type="search" aria-label="Search inbox items" placeholder="Search inbox" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} />
+          <select aria-label="Filter by category" value={selectedCat} onChange={(event) => setSelectedCat(event.target.value as TaskCategory | 'all')}>
+            {CATEGORIES.map((category) => <option key={category} value={category}>{category === 'all' ? 'All categories' : category}</option>)}
+          </select>
           <select aria-label="Filter by status" value={selectedStatus} onChange={(event) => setSelectedStatus(event.target.value as TaskStatus | 'all')}>
             <option value="inbox">Inbox</option><option value="all">All statuses</option><option value="next">Next</option><option value="in_progress">In progress</option><option value="waiting">Waiting</option><option value="review">Review</option><option value="ready_to_submit">Ready to submit</option><option value="done">Done</option><option value="archived">Archived</option>
           </select>
@@ -176,7 +150,7 @@ export const InboxScreen: React.FC = () => {
               type="text"
               placeholder="e.g. Look into FlashAttention-3 Triton kernel benchmark results"
               value={noteTitle}
-              onChange={(e) => setNoteTitle(e.target.value)}
+              onChange={(e) => { setNoteTitle(e.target.value); setNoteError(''); }}
               style={{
                 flex: 1,
                 padding: '8px 10px',
@@ -212,6 +186,7 @@ export const InboxScreen: React.FC = () => {
               Pin Note
             </button>
           </div>
+          {noteError && <p className="inbox-error" role="alert">{noteError}</p>}
         </div>
       )}
 
@@ -257,10 +232,10 @@ export const InboxScreen: React.FC = () => {
           }}
         >
           <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--onyx)' }}>
-            Unprocessed Inbox Items ({regularInbox.length})
+            Items in this view ({regularInbox.length})
           </h2>
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Capture first, categorize and triage to Kanban lanes
+            Capture, filter, sort, and move items to a Kanban lane
           </span>
         </div>
 

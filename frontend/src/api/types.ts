@@ -89,3 +89,34 @@ export interface CreateJobPayload {
   budgetTokens?: number;
   parameters?: Record<string, unknown>;
 }
+
+export type CalendarConnectorStatus =
+  | 'not_configured'
+  | 'not_connected'
+  | 'connecting'
+  | 'connected'
+  | 'reauthorization_required'
+  | 'error';
+
+export interface CalendarIntegrationState {
+  provider: 'google_calendar';
+  status: CalendarConnectorStatus;
+  available: boolean;
+  accountEmail?: string;
+  lastSuccessfulSyncAt?: string;
+  lastError?: string;
+}
+
+/** Implemented by a trusted backend adapter; OAuth tokens never belong in the browser. */
+export interface GoogleCalendarIntegrationAdapter {
+  getState(): Promise<CalendarIntegrationState>;
+  connect(): Promise<CalendarIntegrationState>;
+  disconnect(): Promise<CalendarIntegrationState>;
+  sync(): Promise<{ completedAt: string; importedCount: number; updatedCount: number }>;
+}
+
+export const UNAVAILABLE_GOOGLE_CALENDAR: CalendarIntegrationState = {
+  provider: 'google_calendar',
+  status: 'not_configured',
+  available: false,
+};

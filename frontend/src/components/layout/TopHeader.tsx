@@ -11,6 +11,7 @@ import {
 import { useAgent } from '../../context/AgentContext';
 import { RoomBadge } from '../common/Badge';
 import { INITIAL_PERSONAS } from '../../data/mockData';
+import { NotificationPopover } from './NotificationPopover';
 
 export const TopHeader: React.FC = () => {
   const {
@@ -32,6 +33,7 @@ export const TopHeader: React.FC = () => {
     graph: { title: 'Knowledge Graph', breadcrumb: 'Context / Semantic Network' },
     workbench: { title: 'Ask LARA', breadcrumb: 'Conversation / Local simulation' },
     activity: { title: 'Runs & Reports', breadcrumb: 'Operations / Telemetry' },
+    run_console: { title: 'Run console', breadcrumb: 'Operations / Preview & trace' },
     approvals: { title: 'Approval Queue', breadcrumb: 'Governance / High-Risk Gates' },
     reminders: { title: 'Reminder Schedule', breadcrumb: 'Planning / Alerts' },
     rooms: { title: 'Rooms & Policy', breadcrumb: 'Security / Compartmentalization' },
@@ -145,6 +147,7 @@ export const TopHeader: React.FC = () => {
 
       {/* Active Context Badges & Quick Action Buttons */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <NotificationPopover />
         {/* Undo Action Button */}
         {canUndo && (
           <button

@@ -169,9 +169,12 @@ const SortableTaskCard: React.FC<SortableTaskCardProps> = ({ task, onSelect, onS
           </span>
         )}
       </div>
-      <select className="kanban-status-select" aria-label={`Move ${task.title}`} value={task.status} onClick={(event) => event.stopPropagation()} onChange={(event) => onStatusChange(task.id, event.target.value as TaskStatus)}>
-        <option value="inbox">Inbox</option><option value="next">Next</option><option value="in_progress">In progress</option><option value="waiting">Waiting</option><option value="review">Review</option><option value="ready_to_submit">Ready to submit</option><option value="done">Done</option><option value="archived">Archived</option>
-      </select>
+      <label className="kanban-move-control" onClick={(event) => event.stopPropagation()}>
+        <span>Move to</span>
+        <select className="kanban-status-select" aria-label={`Move ${task.title} to lane`} value={task.status} onChange={(event) => onStatusChange(task.id, event.target.value as TaskStatus)}>
+          <option value="inbox">Inbox</option><option value="next">Next</option><option value="in_progress">In progress</option><option value="waiting">Waiting</option><option value="review">Review</option><option value="ready_to_submit">Ready to submit</option><option value="done">Done</option><option value="archived">Archived</option>
+        </select>
+      </label>
     </div>
   );
 };
@@ -191,6 +194,7 @@ export const KanbanWorkspace: React.FC = () => {
   const [searchFilter, setSearchFilter] = useState('');
   const [selectedRoomFilter, setSelectedRoomFilter] = useState<string>('all');
   const [activeDragTask, setActiveDragTask] = useState<Task | null>(null);
+  const [moveFeedback, setMoveFeedback] = useState<{ kind: 'status' | 'error'; text: string } | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -210,6 +214,37 @@ export const KanbanWorkspace: React.FC = () => {
     const matchesRoom = selectedRoomFilter === 'all' || t.room === selectedRoomFilter;
     return matchesSearch && matchesRoom;
   });
+
+  const handleTaskMove = async (taskId: string, targetStatus: TaskStatus) => {
+    const validStatuses: TaskStatus[] = ['inbox', 'next', 'in_progress', 'waiting', 'review', 'ready_to_submit', 'done', 'archived'];
+    if (!validStatuses.includes(targetStatus)) {
+      setMoveFeedback({ kind: 'error', text: 'That destination is not a valid task status. No change was made.' });
+      return;
+    }
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) {
+      setMoveFeedback({ kind: 'error', text: 'This task is no longer available. Refresh the board before moving it.' });
+      return;
+    }
+    if (task.status === targetStatus) return;
+    setMoveFeedback(null);
+    try {
+      const saved = await transitionTask(taskId, targetStatus);
+      setMoveFeedback({ kind: 'status', text: `Moved “${saved.title}” to ${targetStatus.replace(/_/g, ' ')}. Saved in this browser.` });
+    } catch {
+      setMoveFeedback({ kind: 'error', text: 'The move was not saved. The task remains in its previous lane; check browser storage and try again.' });
+    }
+  };
+
+  const handleTaskReorder = async (sourceIndex: number, destinationIndex: number, status: TaskStatus) => {
+    setMoveFeedback(null);
+    try {
+      await reorderTasks(sourceIndex, destinationIndex, status);
+      setMoveFeedback({ kind: 'status', text: 'Task order saved in this browser.' });
+    } catch {
+      setMoveFeedback({ kind: 'error', text: 'The new task order was not saved. The previous order remains.' });
+    }
+  };
 
   const handleDragStart = (event: DragStartEvent) => {
     const task = tasks.find((t) => t.id === event.active.id);
@@ -233,7 +268,7 @@ export const KanbanWorkspace: React.FC = () => {
     const overTask = tasks.find((t) => t.id === overId);
     const destinationLane = LANES.find((lane) => lane.id === overId);
     if (destinationLane && !destinationLane.statuses.includes(activeTask.status)) {
-      void transitionTask(activeId, destinationLane.target);
+      void handleTaskMove(activeId, destinationLane.target);
       return;
     }
     if (overTask && activeTask.status === overTask.status && activeId !== overId) {
@@ -241,11 +276,11 @@ export const KanbanWorkspace: React.FC = () => {
       const sourceIndex = laneTasks.findIndex((t) => t.id === activeId);
       const destIndex = laneTasks.findIndex((t) => t.id === overId);
       if (sourceIndex !== -1 && destIndex !== -1) {
-        reorderTasks(sourceIndex, destIndex, activeTask.status);
+        void handleTaskReorder(sourceIndex, destIndex, activeTask.status);
       }
       } else if (overTask && activeTask.status !== overTask.status) {
       const targetLane = LANES.find((lane) => lane.statuses.includes(overTask.status));
-      if (targetLane && !targetLane.statuses.includes(activeTask.status)) void transitionTask(activeId, targetLane.target);
+      if (targetLane && !targetLane.statuses.includes(activeTask.status)) void handleTaskMove(activeId, targetLane.target);
     }
   };
 
@@ -275,6 +310,7 @@ export const KanbanWorkspace: React.FC = () => {
         overflow: 'hidden',
       }}
     >
+      {moveFeedback && <p className={`kanban-move-feedback ${moveFeedback.kind === 'error' ? 'is-error' : ''}`} role={moveFeedback.kind === 'error' ? 'alert' : 'status'}>{moveFeedback.text}</p>}
       {/* Top Filter Bar */}
       <div
         style={{

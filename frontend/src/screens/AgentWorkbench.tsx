@@ -3,6 +3,8 @@ import { ArrowUp, ChevronDown, Clock3, FileSearch, ListPlus, LockKeyhole, Messag
 import { useAgent } from '../context/AgentContext';
 import { INITIAL_ROOMS } from '../data/mockData';
 import { ConversationMessage } from '../types';
+import { AgentNetworkBackground } from '../components/AgentNetworkBackground';
+import { NotificationPopover } from '../components/layout/NotificationPopover';
 
 type WaveState = 'idle' | 'focused' | 'processing' | 'ready' | 'error';
 const suggestions = [
@@ -120,7 +122,7 @@ function MessageText({ message }: { message: ConversationMessage }) {
 }
 
 export const AgentWorkbench: React.FC = () => {
-  const { messages, conversations, activeConversationId, sendMessage, createConversation, selectConversation, activeRoom, activePersona, setActiveScreen } = useAgent();
+  const { messages, conversations, activeConversationId, sendMessage, createConversation, selectConversation, activeRoom, activePersona, setActiveScreen, openRunPreview } = useAgent();
   const [input, setInput] = useState('');
   const [focused, setFocused] = useState(false);
   const [sending, setSending] = useState(false);
@@ -203,12 +205,14 @@ export const AgentWorkbench: React.FC = () => {
       <button className="ask-brand" onClick={() => setActiveScreen('workbench')} aria-label="LARA IV home"><span>LARA IV</span></button>
       <div className="ask-context"><LockKeyhole className="context-lock" size={13} aria-hidden="true" /><span>{room?.name || 'Operations'} room</span><span className="context-divider" /><span>{activePersona.replaceAll('_', ' ')}</span></div>
       <div className="ask-actions">
+        <NotificationPopover />
         {active && <button className="quiet-action" onClick={() => void startConversation()}><MessageSquarePlus size={15} />New chat</button>}
         <button ref={historyTriggerRef} className="quiet-action" onClick={() => setHistoryOpen(true)} aria-haspopup="dialog"><Clock3 size={15} />History</button>
       </div>
     </header>
 
     {active ? <div className="chat-stage">
+      <AgentNetworkBackground />
       <div className="chat-brand-strip"><Waveform state={state} compact />
         <div><p className="ask-overline">BROWSER SIMULATION</p><h1 id="ask-lara-title">{conversations.find((item) => item.id === activeConversationId)?.title || 'New conversation'}</h1></div>
       </div>
@@ -229,8 +233,10 @@ export const AgentWorkbench: React.FC = () => {
         {input.trim() && <div className="operation-preview"><button onClick={() => setOperationOpen((value) => !value)} aria-expanded={operationOpen}><span>Prompt routing preview: <strong>{simulateOperation}</strong></span><ChevronDown size={14} /></button>
           {operationOpen && <p>This is a local text preview only. Sending stores your prompt with a static reply; it does not call this operation.</p>}
         </div>}
+        {input.trim() && <button type="button" className="run-preview-action" onClick={() => openRunPreview(input)}>Preview this request in Run Console <span>No execution starts</span></button>}
       </div>
     </div> : <div className="ask-content">
+      <AgentNetworkBackground />
       <div className="ask-intro"><p className="ask-overline">A LOCAL WORKSPACE FOR YOUR NEXT THOUGHT</p>
         <h1 id="ask-lara-title">Good to see you.</h1>
         <p className="ask-lede">What would you like to think through or put in motion?</p>
@@ -251,6 +257,7 @@ export const AgentWorkbench: React.FC = () => {
       {input.trim() && <div className="operation-preview"><button onClick={() => setOperationOpen((value) => !value)} aria-expanded={operationOpen}><span>Prompt routing preview: <strong>{simulateOperation}</strong></span><ChevronDown size={14} /></button>
         {operationOpen && <p>This is a local text preview only. Sending stores your prompt with a static reply; it does not call this operation.</p>}
       </div>}
+      {input.trim() && <button type="button" className="run-preview-action" onClick={() => openRunPreview(input)}>Preview this request in Run Console <span>No execution starts</span></button>}
       <div className="prompt-suggestions" aria-label="Suggested prompts">{suggestions.map((item) => <button key={item.label} onClick={() => sendPrompt(item.prompt)}>{item.label}<span aria-hidden="true">↗</span></button>)}</div>
       <section className="tools-disclosure"><button className="tools-toggle" aria-expanded={toolsOpen} onClick={() => setToolsOpen((value) => !value)}><span className="tools-toggle-icon"><Wrench size={15} /></span><span><strong>Skills &amp; tools</strong><small>Inspect available prototype operations</small></span><ChevronDown className={toolsOpen ? 'rotated' : ''} size={16} /></button>
         {toolsOpen && <div className="tools-list">{operations.map((operation) => <div className="tool-row" key={operation.name}><span className="tool-icon">{operation.icon}</span><span className="tool-copy"><strong>{operation.name}</strong><small>{operation.detail}</small></span><span className={`tool-availability ${operation.available ? 'mock-available' : 'not-connected'}`}>{operation.available ? 'Demo UI available' : 'Unavailable'}</span></div>)}</div>}

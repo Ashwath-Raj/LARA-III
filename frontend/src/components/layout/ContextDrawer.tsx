@@ -4,10 +4,8 @@ import {
   Calendar,
   Folder,
   Trash2,
-  Play,
-  Pause,
-  StopCircle,
   Share2,
+  TerminalSquare,
 } from 'lucide-react';
 
 import { useAgent } from '../../context/AgentContext';
@@ -28,9 +26,7 @@ export const ContextDrawer: React.FC = () => {
     graphNodes,
     openNodeDetail,
     selectedJob,
-    pauseJob,
-    resumeJob,
-    cancelJob,
+    setActiveScreen,
     selectedApproval,
     decideApproval,
   } = useAgent();
@@ -583,67 +579,8 @@ export const ContextDrawer: React.FC = () => {
               </div>
             </div>
 
-            {/* Controls */}
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {selectedJob.status === 'executing' && (
-                <button
-                  onClick={() => pauseJob(selectedJob.id)}
-                  style={{
-                    flex: 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '6px',
-                    padding: '8px',
-                    backgroundColor: 'var(--status-warning-bg)',
-                    color: 'var(--status-warning)',
-                    borderRadius: '6px',
-                    fontWeight: 600,
-                    fontSize: '12px',
-                  }}
-                >
-                  <Pause size={14} /> Pause Run
-                </button>
-              )}
-
-              {selectedJob.status === 'paused' && (
-                <button
-                  onClick={() => resumeJob(selectedJob.id)}
-                  style={{
-                    flex: 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '6px',
-                    padding: '8px',
-                    backgroundColor: 'var(--status-info-bg)',
-                    color: 'var(--cerulean)',
-                    borderRadius: '6px',
-                    fontWeight: 600,
-                    fontSize: '12px',
-                  }}
-                >
-                  <Play size={14} /> Resume Run
-                </button>
-              )}
-
-              <button
-                onClick={() => cancelJob(selectedJob.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 12px',
-                  backgroundColor: 'var(--status-danger-bg)',
-                  color: 'var(--status-danger)',
-                  borderRadius: '6px',
-                  fontWeight: 600,
-                  fontSize: '12px',
-                }}
-              >
-                <StopCircle size={14} /> Cancel
-              </button>
-            </div>
+            <div className="run-boundary-banner" role="note"><strong>Sample only.</strong> This browser record is not a live job; pause, resume, and cancel are unavailable.</div>
+            <button className="u-btn u-btn-secondary" type="button" onClick={() => setActiveScreen('run_console')}><TerminalSquare size={14} /> Open Run Console</button>
 
             {/* Tool Calls Log */}
             {selectedJob.toolTraces && (
@@ -657,7 +594,7 @@ export const ContextDrawer: React.FC = () => {
                     marginBottom: '6px',
                   }}
                 >
-                  Bounded Tool Executions
+                  Recorded step samples
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {selectedJob.toolTraces.map((tc) => (
@@ -728,6 +665,18 @@ export const ContextDrawer: React.FC = () => {
                 </span>
               </div>
               <div>
+                <span style={{ color: 'var(--text-muted)' }}>Destination: </span>
+                <span style={{ fontWeight: 600 }}>{selectedApproval.destination}</span>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)' }}>Risk / external transfer: </span>
+                <span style={{ fontWeight: 600 }}>{selectedApproval.riskTier} · {selectedApproval.leavesMachine ? 'leaves this device' : 'stays on this device'}</span>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)' }}>Reversibility / expiry: </span>
+                <span style={{ fontWeight: 600 }}>{selectedApproval.reversibility} · {new Date(selectedApproval.expiresAt).toLocaleString()}</span>
+              </div>
+              <div>
                 <span style={{ color: 'var(--text-muted)' }}>Policy Gate: </span>
                 <span style={{ fontWeight: 600 }}>{selectedApproval.policyBasis}</span>
               </div>
@@ -764,6 +713,8 @@ export const ContextDrawer: React.FC = () => {
 
             {/* Decision Controls */}
             {selectedApproval.status === 'pending' ? (
+              <>
+              <p className="run-local-note">This is a browser-local approval simulation. Recording a decision here does not run the proposed action.</p>
               <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
                 <button
                   onClick={() => requestApprovalDecision('approve')}
@@ -778,7 +729,7 @@ export const ContextDrawer: React.FC = () => {
                     cursor: 'pointer',
                   }}
                 >
-                  {selectedApproval.specificButtonLabel || 'Approve Action'}
+                  Simulate: {selectedApproval.specificButtonLabel || 'Approve Action'}
                 </button>
                 <button
                   onClick={() => requestApprovalDecision('reject')}
@@ -793,9 +744,10 @@ export const ContextDrawer: React.FC = () => {
                     cursor: 'pointer',
                   }}
                 >
-                  Reject & Abort
+                  Record demo rejection
                 </button>
               </div>
+              </>
             ) : (
               <div
                 style={{
@@ -814,7 +766,7 @@ export const ContextDrawer: React.FC = () => {
                       : 'var(--status-danger)',
                 }}
               >
-                Decision: {selectedApproval.status.toUpperCase()}
+                  Browser-local decision: {selectedApproval.status.toUpperCase()} · no external action executed
               </div>
             )}
           </div>
