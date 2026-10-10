@@ -143,6 +143,99 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     );
     INSERT INTO runtime_controls VALUES (1,0,0,'1970-01-01T00:00:00Z','system');
     """),
+    (5, """
+    CREATE TABLE desktop_workspaces (
+      id TEXT PRIMARY KEY, purpose TEXT NOT NULL, room_id TEXT NOT NULL REFERENCES rooms(id),
+      status TEXT NOT NULL CHECK(status IN ('active','unavailable','cleaned')),
+      layout_json TEXT NOT NULL, previous_layout_json TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE desktop_slots (
+      id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES desktop_workspaces(id) ON DELETE CASCADE,
+      slot_name TEXT NOT NULL CHECK(slot_name IN ('nw','ne','sw','se')),
+      purpose TEXT NOT NULL, app_identity TEXT, requested_url TEXT, current_location TEXT,
+      bounds_json TEXT, focused INTEGER NOT NULL DEFAULT 0 CHECK(focused IN (0,1)),
+      ready INTEGER NOT NULL DEFAULT 0 CHECK(ready IN (0,1)),
+      status TEXT NOT NULL CHECK(status IN ('active','unavailable','awaiting_user')),
+      last_screenshot_id TEXT, UNIQUE(workspace_id, slot_name)
+    );
+    CREATE TABLE desktop_runs (
+      id TEXT PRIMARY KEY, workspace_id TEXT REFERENCES desktop_workspaces(id),
+      job_id TEXT, session_id TEXT NOT NULL, persona_id TEXT NOT NULL REFERENCES personas(id),
+      room_id TEXT NOT NULL REFERENCES rooms(id),
+      status TEXT NOT NULL CHECK(status IN ('queued','running','paused','awaiting_approval','cancelled','failed','succeeded')),
+      permissions_json TEXT NOT NULL, domain_scope_json TEXT NOT NULL, deadline_at TEXT NOT NULL,
+      cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX desktop_runs_status ON desktop_runs(status, updated_at);
+    CREATE TABLE desktop_events (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES desktop_runs(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL,
+      safe_payload_json TEXT NOT NULL, UNIQUE(run_id, sequence)
+    );
+    CREATE TABLE desktop_screenshots (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES desktop_runs(id) ON DELETE CASCADE,
+      slot_name TEXT, path TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+      scale REAL NOT NULL, captured_at TEXT NOT NULL, expires_at TEXT NOT NULL
+    );
+    CREATE TABLE desktop_run_plans (
+      run_id TEXT PRIMARY KEY REFERENCES desktop_runs(id) ON DELETE CASCADE,
+      plan_json TEXT NOT NULL
+    );
+    CREATE TABLE ai_loops (
+      id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id),
+      persona_id TEXT NOT NULL REFERENCES personas(id), goal TEXT NOT NULL,
+      constraints_json TEXT NOT NULL, provider_mode TEXT NOT NULL,
+      cloud_opt_in INTEGER NOT NULL DEFAULT 0 CHECK(cloud_opt_in IN (0,1)),
+      status TEXT NOT NULL CHECK(status IN ('created','debating','awaiting_user','synthesized','imported','declined','cancelled','failed')),
+      max_rounds INTEGER NOT NULL CHECK(max_rounds BETWEEN 3 AND 12),
+      job_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, cancelled_at TEXT
+    );
+    CREATE TABLE loop_rounds (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      round_index INTEGER NOT NULL, stage TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed','cancelled')),
+      summary TEXT NOT NULL DEFAULT '', output_json TEXT NOT NULL DEFAULT '{}',
+      job_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE(loop_id, round_index)
+    );
+    CREATE TABLE loop_artifacts (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      artifact_type TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE loop_handoffs (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      provider_mode TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('awaiting_user','imported','declined','cancelled')),
+      compiled_prompt TEXT NOT NULL, imported_text TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE loop_nodes (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      node_type TEXT NOT NULL, display_name TEXT NOT NULL, room_id TEXT NOT NULL REFERENCES rooms(id),
+      sensitivity_label TEXT NOT NULL CHECK(sensitivity_label IN ('public','internal','sensitive','restricted')),
+      content TEXT NOT NULL, provenance_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE loop_edges (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      source_node_id TEXT NOT NULL REFERENCES loop_nodes(id),
+      relation_type TEXT NOT NULL CHECK(relation_type IN ('supports','contradicts','refines','derived_from','resolves')),
+      target_node_id TEXT NOT NULL REFERENCES loop_nodes(id),
+      room_id TEXT NOT NULL REFERENCES rooms(id),
+      sensitivity_label TEXT NOT NULL CHECK(sensitivity_label IN ('public','internal','sensitive','restricted')),
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX loop_edges_loop ON loop_edges(loop_id, source_node_id, target_node_id);
+    CREATE TABLE loop_sources (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      display_name TEXT NOT NULL, trust_label TEXT NOT NULL, content TEXT NOT NULL,
+      ingested INTEGER NOT NULL DEFAULT 0 CHECK(ingested IN (0,1)), created_at TEXT NOT NULL
+    );
+    CREATE TABLE local_api_sessions (
+      id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, origin_allowlist_json TEXT NOT NULL,
+      created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+    );
+    """),
 )
 
 

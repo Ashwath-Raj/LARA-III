@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -199,12 +200,31 @@ class ProviderRouter:
             "ollama": ollama or OllamaProvider(self.config),
             "gemini": gemini or GeminiProvider(self.config),
         }
+        self.audit_log: list[dict[str, Any]] = []
 
     def selected(self, provider: str | None) -> str:
         selected = self.config.default_provider if provider is None else provider
         if not isinstance(selected, str) or selected not in self.providers:
             raise ProviderConfigurationError("Unknown provider selection.")
         return selected
+
+    def _record_audit(self, *, provider: str, action_id: str, reason: str, room_id: str, sensitivity: str,
+                      data_categories: list[str], consent: str, outcome: str, duration_ms: float,
+                      error: str | None = None) -> None:
+        self.audit_log.append({
+            "provider": provider,
+            "action_id": action_id,
+            "reason": reason,
+            "destination": "local" if provider == "ollama" else "external",
+            "room_id": room_id,
+            "sensitivity": sensitivity,
+            "data_categories": data_categories,
+            "consent": consent,
+            "outcome": outcome,
+            "duration_ms": duration_ms,
+            "error": error,
+            "session_id": "local-session",
+        })
 
     def _authorize(self, actor: Actor, *, action_id: str, room_id: str, sensitivity: str,
                    provider: str, resource_id: str) -> None:
@@ -224,8 +244,9 @@ class ProviderRouter:
         selected = self.selected(provider)
         if not isinstance(actor, Actor):
             raise PolicyDeniedError("Provider request is not authorized by local policy.")
-        if selected == "gemini" and not cloud_opt_in:
-            raise PolicyDeniedError("Hosted inference requires explicit opt-in.")
+        if selected == "gemini" and action_id != "provider.health_check" and not self.config.can_route_cloud(
+                explicit_opt_in=cloud_opt_in, provider=selected):
+            raise PolicyDeniedError("Hosted inference requires explicit opt-in and a configured external fallback policy.")
         self._authorize(actor, action_id=action_id, room_id=room_id, sensitivity=sensitivity,
                         provider=selected, resource_id=resource_id)
         return selected
@@ -241,7 +262,21 @@ class ProviderRouter:
                               cloud_opt_in: bool = False) -> GenerationResult:
         selected = self.authorize_task_capture(actor, provider=provider, cloud_opt_in=cloud_opt_in)
         # Policy is evaluated before the adapter receives the prompt.
-        return self.providers[selected].generate_text(prompt, response_schema=response_schema)
+        started = time.perf_counter()
+        try:
+            result = self.providers[selected].generate_text(prompt, response_schema=response_schema)
+            self._record_audit(provider=selected, action_id="task.capture", reason="task preview generation",
+                              room_id="operations", sensitivity="internal", data_categories=["task_text"],
+                              consent="explicit" if selected == "ollama" else "opt_in" if cloud_opt_in else "denied",
+                              outcome="success", duration_ms=(time.perf_counter() - started) * 1000)
+            return result
+        except ProviderError as exc:
+            self._record_audit(provider=selected, action_id="task.capture", reason="task preview generation",
+                              room_id="operations", sensitivity="internal", data_categories=["task_text"],
+                              consent="explicit" if selected == "ollama" else "opt_in" if cloud_opt_in else "denied",
+                              outcome="error", duration_ms=(time.perf_counter() - started) * 1000,
+                              error=f"{type(exc).__name__}: {str(exc)[:200]}")
+            raise
 
     def health_check(self, provider: str | None, actor: Actor) -> GenerationResult:
         selected = self.selected(provider)
@@ -249,4 +284,18 @@ class ProviderRouter:
         selected = self._ensure_authorized(actor, provider=selected, action_id="provider.health_check",
                                            room_id="public_research", sensitivity="public",
                                            resource_id="generic-health-check", cloud_opt_in=selected == "gemini")
-        return self.providers[selected].generate_text("Reply with the single word OK.")
+        started = time.perf_counter()
+        try:
+            result = self.providers[selected].generate_text("Reply with the single word OK.")
+            self._record_audit(provider=selected, action_id="provider.health_check", reason="connectivity verification",
+                              room_id="public_research", sensitivity="public", data_categories=["metadata_only"],
+                              consent="automatic" if selected == "ollama" else "opt_in",
+                              outcome="success", duration_ms=(time.perf_counter() - started) * 1000)
+            return result
+        except ProviderError as exc:
+            self._record_audit(provider=selected, action_id="provider.health_check", reason="connectivity verification",
+                              room_id="public_research", sensitivity="public", data_categories=["metadata_only"],
+                              consent="automatic" if selected == "ollama" else "opt_in",
+                              outcome="error", duration_ms=(time.perf_counter() - started) * 1000,
+                              error=f"{type(exc).__name__}: {str(exc)[:200]}")
+            raise

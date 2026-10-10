@@ -17,3 +17,6 @@ rag = ["qdrant-client==1.14.3"]
 
 [tool.setuptools.packages.find]
 include = ["ubuntu_agent*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
