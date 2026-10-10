@@ -69,6 +69,8 @@ An approval must be specific and short-lived. Persist at least:
 - policy rule/version that required or allowed the action
 - creation time, expiry, decision and execution status
 
+The local prototype identity is the configured single OS user's `local-user` application identity. The CLI has no independent login or authenticated approver ceremony; approval decisions are attributable to that local application identity only, not strongly authenticated distinct people. Approval does not add an action to the implementation registry. In Phase 4, no Classroom submission, external message, shell, deletion, privileged system operation, browser action, or other unimplemented handler is executable, even if an approval row exists.
+
 Any change to the tool name, target, file, recipient, course, assignment, command or material argument invalidates the approval. Consuming an approval is atomic so two workers cannot execute it twice. Never reuse an approval across retries that could produce a new external side effect unless the adapter can prove the original action did not occur and policy explicitly allows safe retry.
 
 For command approvals, show command, working directory, environment changes and affected paths. For Classroom, show course, assignment, exact attachment and operation. For cloud disclosure, show provider and categories of context to be sent.

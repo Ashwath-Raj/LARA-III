@@ -18,7 +18,24 @@ For a reminder that should move with a timed deadline, create the task with `--d
 
 The default database is `${XDG_DATA_HOME:-~/.local/share}/ubuntu-agent/ubuntu-agent.sqlite3`. Use `--db PATH` before the command to select another path. A persona may be selected with `--persona`; available IDs are `task_deadline_manager`, `exam_study_coach`, `ai_ml_researcher`, and `desktop_operator`. Operations that require a persona or room grant are checked in the service layer. Task completion requires evidence.
 
-The current CLI has no approval execution path: approval-gated external actions remain unavailable. A local single-user process is the identity boundary in this milestone; do not expose the service to untrusted callers.
+The CLI can persist, inspect, approve, reject, revoke through the service layer, and consume approvals only for explicitly registered handlers. The current policy has no executable Classroom submit, external message, arbitrary shell, file deletion, browser, or privileged system handler; approvals cannot enable these actions. A local single-user process is the identity boundary, not strong multi-user authentication. Do not expose the service to untrusted callers.
+
+## Durable reminders and worker
+
+The SQLite queue stores reminder deliveries with a stable idempotency key, payload validation, leases and bounded retries. Reconcile after startup, then run the worker in the foreground:
+
+```sh
+python -m ubuntu_agent reminders-reconcile
+python -m ubuntu_agent worker --once
+python -m ubuntu_agent worker --interval-seconds 5
+python -m ubuntu_agent reminders
+python -m ubuntu_agent reminder-snooze REMINDER_ID 2027-11-05T09:00:00Z
+python -m ubuntu_agent reminder-dismiss REMINDER_ID
+```
+
+The continuous command runs only while its terminal process is alive; `Ctrl-C` requests orderly shutdown. No service or startup configuration is installed. Local delivery uses `/usr/bin/notify-send`; a missing desktop session or executable retries up to five times and leaves the reminder `missed`. A crash between showing a notification and saving success can result in a duplicate.
+
+`autonomy-pause` holds autonomy jobs but allows safe local reminder notifications. `autonomy-kill` blocks all worker dispatch until `autonomy-recover`. Approval decisions are tied to this local application identity, and do not authorize unsupported actions.
 
 ## Provider integration and task previews
 

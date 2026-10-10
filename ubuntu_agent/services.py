@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 import hashlib
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .bootstrap import PRINCIPAL_ID
@@ -91,6 +91,19 @@ def _validate_deadline_pair(due_date: str | None, due_at: str | None, timezone_n
     local_date = instant.astimezone(ZoneInfo(timezone_name)).date().isoformat()
     if local_date != due_date:
         raise ValidationError("due_date must match due_at in the task timezone.")
+
+
+def _invalidate_reminder_jobs(connection: sqlite3.Connection, reminder_id: str, generation: int, now: str) -> None:
+    """Cancel queued work for one superseded occurrence in the caller's transaction."""
+    rows = connection.execute("SELECT id,payload_json FROM jobs WHERE job_type='reminder.deliver' AND status IN ('queued','retry_wait')").fetchall()
+    for job in rows:
+        try:
+            payload = json.loads(job["payload_json"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if payload.get("reminder_id") == reminder_id and payload.get("generation") == generation:
+            connection.execute("UPDATE jobs SET status='cancelled',cancelled_at=?,finished_at=?,updated_at=? WHERE id=?",
+                               (now, now, now, job["id"]))
 
 
 class BaseService:
@@ -189,8 +202,7 @@ class TaskService(BaseService):
         task_id = str(uuid.uuid4())
         now = utc_now()
         with self.database.connect() as connection:
-            if idempotency_key:
-                connection.execute("BEGIN IMMEDIATE")
+            connection.execute("BEGIN IMMEDIATE")
             category_row = connection.execute("SELECT id FROM categories WHERE name = ? AND is_active = 1", (category,)).fetchone()
             if category_row is None:
                 raise ValidationError("Unknown or inactive category.")
@@ -260,6 +272,7 @@ class TaskService(BaseService):
         if set(patch) - allowed:
             raise ValidationError("Patch contains unsupported fields.")
         with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT id,room_id FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
                 raise NotFoundError("Task not found.")
@@ -288,9 +301,9 @@ class TaskService(BaseService):
                 values["timezone"] = patch["timezone"]
             _validate_deadline_pair(values["due_date"], values["due_at"], values["timezone"])
             deadline_changed = values["due_date"] != current["due_date"] or values["due_at"] != current["due_at"]
-            reminder_updates: list[tuple[str, str]] = []
+            reminder_updates: list[tuple[str, str, int]] = []
             if deadline_changed:
-                active_reminders = connection.execute("SELECT id,rule_snapshot FROM reminders WHERE task_id=? AND status IN ('scheduled','snoozed')", (task_id,)).fetchall()
+                active_reminders = connection.execute("SELECT id,rule_snapshot,generation FROM reminders WHERE task_id=? AND status IN ('scheduled','snoozed')", (task_id,)).fetchall()
                 if ("due_date" in patch and values["due_date"] != current["due_date"]
                     and "due_at" not in patch and active_reminders):
                     raise ConflictError("Update due_at with due_date to safely reschedule active reminders.")
@@ -300,13 +313,14 @@ class TaskService(BaseService):
                         offset = rule.get("offset_minutes") if rule.get("kind") == "relative_to_due_at" else None
                         if type(offset) is not int or not 0 <= offset <= 525600 or values["due_at"] is None:
                             raise ValueError("Reminder rule is not safely reschedulable.")
-                        reminder_updates.append((reminder["id"], _relative_schedule(values["due_at"], offset)))
+                        reminder_updates.append((reminder["id"], _relative_schedule(values["due_at"], offset), reminder["generation"]))
                     except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
                         raise ConflictError("A scheduled reminder cannot be safely rescheduled.") from exc
             connection.execute("""UPDATE tasks SET title=?,description=?,priority=?,category_id=?,due_date=?,due_at=?,timezone=?,updated_at=? WHERE id=?""",
                                (*values.values(), utc_now(), task_id))
-            for reminder_id, scheduled_at in reminder_updates:
-                connection.execute("UPDATE reminders SET scheduled_at=?,updated_at=? WHERE id=?",
+            for reminder_id, scheduled_at, generation in reminder_updates:
+                _invalidate_reminder_jobs(connection, reminder_id, generation, utc_now())
+                connection.execute("UPDATE reminders SET scheduled_at=?,generation=generation+1,updated_at=? WHERE id=?",
                                    (scheduled_at, utc_now(), reminder_id))
             self._audit(connection, actor, "task.update", task_id, "allow", "succeeded")
             return self._task_row(connection, task_id)
@@ -336,14 +350,19 @@ class TaskService(BaseService):
 
 
 class ReminderService(BaseService):
+    def __init__(self, database: Database, policy: PolicyEngine | None = None, *, clock: Callable[[], str] | None = None):
+        super().__init__(database, policy)
+        self.clock = clock or utc_now
+
     def create_reminder(self, task_id: str, scheduled_at: str, message: str, actor: Actor,
                         *, reminder_type: str = "custom", offset_minutes: int | None = None) -> dict[str, Any]:
         _validate_string(task_id, "task_id", maximum=100)
         when = _validate_instant(scheduled_at, "scheduled_at")
         message = _validate_string(message, "message", maximum=1000)
         reminder_type = _validate_string(reminder_type, "reminder_type", maximum=100)
-        reminder_id, now = str(uuid.uuid4()), utc_now()
+        reminder_id, now = str(uuid.uuid4()), self.clock()
         with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             task = connection.execute("SELECT id,room_id,due_at FROM tasks WHERE id=?", (task_id,)).fetchone()
             if task is None: raise NotFoundError("Task not found.")
             self._authorize(connection, actor, task["room_id"], task_id, "reminder.create", hide_denial=True)
@@ -358,7 +377,8 @@ class ReminderService(BaseService):
                 rule_snapshot = {"kind": "fixed", "scheduled_at": when}
             else:
                 raise ValidationError("Unsupported reminder rule.")
-            connection.execute("INSERT INTO reminders VALUES (?,?,?,?,?,'scheduled','local',NULL,?,?,?)",
+            connection.execute("""INSERT INTO reminders(id,task_id,scheduled_at,reminder_type,message,status,delivery_channel,
+              delivered_at,rule_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,'scheduled','local',NULL,?,?,?)""",
                                (reminder_id,task_id,when,reminder_type,message,json.dumps(rule_snapshot, sort_keys=True),now,now))
             self._audit(connection, actor, "reminder.create", reminder_id, "allow", "succeeded")
             return dict(connection.execute("SELECT * FROM reminders WHERE id=?", (reminder_id,)).fetchone())
@@ -374,4 +394,81 @@ class ReminderService(BaseService):
                 except NotFoundError: continue
                 visible.append({k: row[k] for k in row.keys() if k != "room_id"})
             return visible
+
+    def list_upcoming_reminders(self, actor: Actor, *, window_hours: int = 168, now: str | None = None) -> list[dict[str, Any]]:
+        if type(window_hours) is not int or not 0 <= window_hours <= 8760:
+            raise ValidationError("window_hours must be between 0 and 8760.")
+        current = _validate_instant(now, "now") if now is not None else self.clock()
+        end = (datetime.fromisoformat(current.replace("Z", "+00:00")) + timedelta(hours=window_hours)).isoformat(timespec="seconds").replace("+00:00", "Z")
+        with self.database.connect() as connection:
+            rows = connection.execute("""SELECT reminders.*,tasks.room_id,tasks.timezone FROM reminders JOIN tasks ON tasks.id=reminders.task_id
+              WHERE reminders.status IN ('scheduled','snoozed','missed') AND reminders.scheduled_at<=?
+              ORDER BY reminders.scheduled_at""", (end,)).fetchall()
+            result = []
+            for row in rows:
+                try:
+                    self._authorize(connection, actor, row["room_id"], row["task_id"], "reminder.read", hide_denial=True)
+                except NotFoundError:
+                    continue
+                item = {key: row[key] for key in row.keys() if key != "room_id"}
+                item["due_now"] = row["status"] == "scheduled" and row["scheduled_at"] <= current
+                result.append(item)
+            return result
+
+    def snooze_reminder(self, reminder_id: str, until: str, actor: Actor) -> dict[str, Any]:
+        _validate_string(reminder_id, "reminder_id", maximum=100)
+        until_utc = _validate_instant(until, "until")
+        now = self.clock()
+        if until_utc <= now:
+            raise ValidationError("Snooze time must be in the future.")
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT r.*,t.room_id FROM reminders r JOIN tasks t ON t.id=r.task_id WHERE r.id=?", (reminder_id,)).fetchone()
+            if row is None: raise NotFoundError("Reminder not found.")
+            self._authorize(connection, actor, row["room_id"], row["task_id"], "reminder.create", hide_denial=True)
+            if row["status"] not in ("scheduled", "missed", "snoozed"):
+                raise ConflictError("Reminder cannot be snoozed from its current state.")
+            _invalidate_reminder_jobs(connection, reminder_id, row["generation"], now)
+            connection.execute("UPDATE reminders SET scheduled_at=?,status='snoozed',generation=generation+1,updated_at=? WHERE id=?",
+                               (until_utc, now, reminder_id))
+            self._audit(connection, actor, "reminder.snooze", reminder_id, "allow", "succeeded")
+            return dict(connection.execute("SELECT * FROM reminders WHERE id=?", (reminder_id,)).fetchone())
+
+    def dismiss_reminder(self, reminder_id: str, actor: Actor) -> dict[str, Any]:
+        return self._terminal_reminder(reminder_id, actor, "dismissed", "reminder.dismiss")
+
+    def cancel_reminder(self, reminder_id: str, actor: Actor) -> dict[str, Any]:
+        return self._terminal_reminder(reminder_id, actor, "cancelled", "reminder.cancel")
+
+    def _terminal_reminder(self, reminder_id: str, actor: Actor, state: str, action: str) -> dict[str, Any]:
+        _validate_string(reminder_id, "reminder_id", maximum=100)
+        now = self.clock()
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT r.*,t.room_id FROM reminders r JOIN tasks t ON t.id=r.task_id WHERE r.id=?", (reminder_id,)).fetchone()
+            if row is None: raise NotFoundError("Reminder not found.")
+            self._authorize(connection, actor, row["room_id"], row["task_id"], "reminder.create", hide_denial=True)
+            if row["status"] not in ("scheduled", "missed", "snoozed"):
+                raise ConflictError("Reminder is already terminal.")
+            _invalidate_reminder_jobs(connection, reminder_id, row["generation"], now)
+            connection.execute("UPDATE reminders SET status=?,generation=generation+1,updated_at=? WHERE id=?", (state, now, reminder_id))
+            self._audit(connection, actor, action, reminder_id, "allow", "succeeded")
+            return dict(connection.execute("SELECT * FROM reminders WHERE id=?", (reminder_id,)).fetchone())
+
+    def reconcile_reminders(self, task_id: str | None = None, *, now: str | None = None) -> dict[str, int]:
+        from .jobs import JobQueue
+        if task_id is not None:
+            _validate_string(task_id, "task_id", maximum=100)
+        current = _validate_instant(now, "now") if now is not None else self.clock()
+        queued = 0
+        queue = JobQueue(self.database, clock=lambda: datetime.fromisoformat(self.clock().replace("Z", "+00:00")))
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute("""SELECT r.id,r.generation FROM reminders r WHERE r.status IN ('scheduled','snoozed')
+              AND r.scheduled_at<=? AND (? IS NULL OR r.task_id=?) ORDER BY r.scheduled_at""", (current, task_id, task_id)).fetchall()
+            for row in rows:
+                queue.enqueue_in_transaction(connection, "reminder.deliver", {"reminder_id": row["id"], "generation": row["generation"]},
+                    f"reminder:{row['id']}:generation:{row['generation']}")
+                queued += 1
+        return {"eligible": len(rows), "enqueued": queued}
 

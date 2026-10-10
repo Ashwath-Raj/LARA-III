@@ -21,7 +21,7 @@ Use these tables as the first contract. Add fields only when a real workflow nee
 | Table | Required content |
 |---|---|
 | `tasks` | `id`, `title`, `description`, `item_type`, `status`, `priority`, `category_id`, nullable `project_id`, `room_id`, nullable `persona_owner`, `due_date`, nullable `due_at`, `timezone`, nullable `personal_target_at`, nullable `estimated_minutes`, `source_text`, `created_at`, `updated_at`, nullable `completed_at`, nullable `completion_evidence` |
-| `reminders` | `id`, `task_id`, `scheduled_at`, `reminder_type`, `message`, `status`, `delivery_channel`, nullable `delivered_at`, `rule_snapshot`, `created_at`, `updated_at` |
+| `reminders` | `id`, `task_id`, `scheduled_at`, `reminder_type`, `message`, `status`, `delivery_channel`, nullable `delivered_at`, `rule_snapshot`, `created_at`, `updated_at`; migration-managed `generation` invalidates queued delivery for an obsolete occurrence |
 | `attachments` | `id`, `task_id`, `path_or_uri`, `display_name`, `mime_type`, `size_bytes`, nullable `checksum`, `provenance`, `room_id`, `sensitivity_label`, `created_at` |
 | `submissions` | `id`, `task_id`, `platform`, `course_id`, `course_name`, `assignment_id`, `assignment_name`, `file_attachment_id`, `state`, nullable `approval_id`, nullable `submission_timestamp`, nullable `verification_evidence`, `created_at`, `updated_at` |
 | `projects` | `id`, `name`, `description`, `room_id`, `status`, `created_at`, `updated_at` |
@@ -34,9 +34,9 @@ Use these tables as the first contract. Add fields only when a real workflow nee
 | `documents` | `id`, `source_id`, `source_uri`, `display_name`, `mime_type`, `content_hash`, `room_id`, `sensitivity_label`, `active_version`, `ingestion_status`, `created_at`, `updated_at` |
 | `document_chunks` | `id`, `document_id`, `version`, `chunk_index`, `text_ref_or_text`, `source_location`, `token_estimate`, `content_hash`, `room_id`, `sensitivity_label`, `created_at` |
 | `cross_room_bridges` | `id`, `source_room_id`, `source_entity_id`, `destination_room_id`, `recipient_scope_json`, `field_allowlist_json`, `purpose`, `created_by`, `created_at`, nullable `expires_at`, nullable `revoked_at`, `policy_ref`, `cloud_destinations_json` |
-| `jobs` | `id`, `goal`, `status`, `scope_json`, `budget_json`, `current_step_id`, `checkpoint_json`, `retry_count`, `started_at`, nullable `finished_at`, nullable `report_ref` |
+| `jobs` | Stable `id`, `job_type`, validated `payload_json`, unique `idempotency_key`, queue status, attempts, eligibility time, lease owner/expiry, retry limit/backoff, safe error class, cancellation and timestamps. See Phase 4 queue migration. |
 | `job_steps` | `id`, `job_id`, `sequence_no`, `step_type`, `status`, `input_ref`, `output_ref`, `attempt_count`, `started_at`, nullable `finished_at`, nullable `error_code` |
-| `approvals` | `id`, `job_id`, `action_type`, `target_ref`, `arguments_hash`, `arguments_preview`, `requested_by`, nullable `approved_by`, `status`, `reason`, `created_at`, `expires_at`, nullable `decided_at`, nullable `executed_at` |
+| `approvals` | `id`, requester principal/persona, action/risk, resource/room/destination, canonical arguments and SHA-256 fingerprint, policy reference, status, creation/expiry/decision/consumption metadata. SQLite migration 4 creates the approval lifecycle table. |
 | `audit_events` | `id`, `timestamp`, `actor_type`, `actor_id`, `action`, `target_ref`, `policy_decision`, nullable `approval_id`, `result_status`, nullable `evidence_ref`, `safe_metadata_json` |
 
 Recommended additional tables as needed: `reminder_rules`, `provider_connections` (without secret material), `notification_events`, `schema_migrations`, `task_events`, and `source_citations`.
@@ -51,9 +51,14 @@ Recommended additional tables as needed: `reminder_rules`, `provider_connections
 - Use transactions for task+reminder creation, submission-state changes, and approval consumption.
 - Use idempotency keys for retriable create/submit preparation operations. A retry must not duplicate tasks or reminders.
 - Treat `audit_events` as append-only from the application API. Do not expose ordinary edit/delete operations for audit records.
+- Queue jobs use unique idempotency keys, typed payload validation on insertion and again on claim/dispatch, attempt-bounded capped exponential retry, and expiring worker leases. Only registered job types and explicitly installed handlers can dispatch.
 - Store UTC timestamps for instants; retain the relevant IANA timezone for display and schedule calculations. Date-only academic deadlines remain date-only rather than being forced into midnight timestamps.
 
 ## Task and submission states
+
+### Reminder state transitions
+
+Persist only `scheduled`, `delivered`, `missed`, `snoozed`, `dismissed` and `cancelled`. `due_now` is a derived view: a scheduled reminder whose UTC `scheduled_at` is at or before the view clock. Legal transitions are `scheduled → delivered | missed | snoozed | dismissed | cancelled`, `missed → snoozed | dismissed | cancelled`, and `snoozed → delivered | missed | dismissed | cancelled`. Delivered, dismissed and cancelled are terminal. Snooze and schedule replacement increment `generation`; every delivery job carries the generation it was created for and must match it at dispatch and commit. When a deadline-relative reminder is recomputed, preserve its existing ID, update its schedule and increment generation in the same transaction. A successful notification may mark delivered only if that generation remains current.
 
 Task status and submission status are separate state machines.
 

@@ -112,6 +112,37 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
       updated_at TEXT NOT NULL, PRIMARY KEY(document_id,version,operation)
     );
     """),
+    (4, """
+    ALTER TABLE reminders ADD COLUMN generation INTEGER NOT NULL DEFAULT 1 CHECK(generation > 0);
+    CREATE TABLE jobs (
+      id TEXT PRIMARY KEY, job_type TEXT NOT NULL, payload_json TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL CHECK(status IN ('queued','running','retry_wait','succeeded','failed','cancelled')),
+      attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), max_attempts INTEGER NOT NULL CHECK(max_attempts BETWEEN 1 AND 5),
+      available_at TEXT NOT NULL, lease_owner TEXT, lease_expires_at TEXT,
+      error_class TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      started_at TEXT, finished_at TEXT, cancelled_at TEXT,
+      CHECK ((status='running' AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL) OR status!='running')
+    );
+    CREATE INDEX jobs_eligible ON jobs(status, available_at);
+    CREATE INDEX jobs_lease_expiry ON jobs(status, lease_expires_at);
+    CREATE TABLE approvals (
+      id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, persona_id TEXT NOT NULL,
+      action_type TEXT NOT NULL, risk_tier TEXT NOT NULL, resource_id TEXT NOT NULL,
+      room_id TEXT NOT NULL, destination TEXT, arguments_json TEXT NOT NULL,
+      arguments_hash TEXT NOT NULL, policy_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired','revoked','invalidated','consumed')),
+      created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT,
+      decided_by TEXT, decision_reason TEXT, consumed_at TEXT,
+      CHECK ((status='consumed' AND consumed_at IS NOT NULL) OR status!='consumed')
+    );
+    CREATE INDEX approvals_pending ON approvals(status, expires_at);
+    CREATE TABLE runtime_controls (
+      singleton INTEGER PRIMARY KEY CHECK(singleton=1), paused INTEGER NOT NULL CHECK(paused IN (0,1)),
+      killed INTEGER NOT NULL CHECK(killed IN (0,1)), updated_at TEXT NOT NULL, updated_by TEXT NOT NULL
+    );
+    INSERT INTO runtime_controls VALUES (1,0,0,'1970-01-01T00:00:00Z','system');
+    """),
 )
 
 

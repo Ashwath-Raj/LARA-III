@@ -52,8 +52,11 @@ Required operations:
 - `save_reminder_plan(task_id, plan, actor) -> Reminder[]`
 - `snooze_reminder(reminder_id, until, actor) -> Reminder`
 - `dismiss_reminder(reminder_id, actor) -> Reminder`
+- `cancel_reminder(reminder_id, actor) -> Reminder`
 - `reconcile_reminders(task_id) -> ReconciliationResult`
 - `list_upcoming_reminders(window, actor) -> Reminder[]`
+
+Reminder transitions and derived `due_now` semantics are defined in `03_DATA_AND_CHUNKING.md`. The persistent worker exposes only registered typed job handlers.
 
 Changing a due date must safely cancel obsolete reminders and create the replacement plan in a transaction or recoverable workflow. Reminder delivery state must distinguish scheduled, delivered, missed, snoozed, dismissed and cancelled.
 
@@ -91,6 +94,8 @@ The job service checks maximum duration, tool/model budgets, allowed rooms/provi
 - `get_pending_approvals(actor) -> Approval[]`
 - `decide_approval(approval_id, decision, actor) -> Approval`
 - `execute_approved_action(approval_id, actor) -> ActionResult`
+
+Approval decisions are bound to the original requester principal/persona and exact action context. This single-user CLI cannot provide strong multi-user approver authentication; see `04_SECURITY_PIPELINE.md`. Approval records do not make unsupported actions executable.
 
 The approval record binds the exact normalized tool, target and arguments hash. Execution re-evaluates policy and expiry. The decision endpoint does not itself execute the action.
 

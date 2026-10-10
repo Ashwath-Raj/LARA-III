@@ -57,6 +57,8 @@ Alternative states: `paused`, `blocked`, `failed`, `cancelled`, `needs_attention
 
 The lifecycle can revisit `running` after approval. Use explicit transitions; do not infer state from free-form model text. Each side-effecting step must have an idempotency strategy or a recovery procedure for uncertain outcomes.
 
+The Phase 4 SQLite job queue provides idempotent enqueue, typed payload revalidation, leases, capped retries, cancellation, pause/kill checks and a bounded foreground worker. Its implemented handler set is deliberately limited to local reminder delivery. The queue and handler registry are not a generic shell or browser execution interface.
+
 ### Policy and approvals
 
 The policy engine authorizes every tool call before execution. Approval creation and consumption are separate operations. The executor must re-check policy and approval immediately before an action. See `04_SECURITY_PIPELINE.md`.
