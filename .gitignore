@@ -25,3 +25,6 @@ data/
 *.sqlite3
 browser-profiles/
 screenshots/
+
+# Python packaging artifacts
+*.egg-info/
