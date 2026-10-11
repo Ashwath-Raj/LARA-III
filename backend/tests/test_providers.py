@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from ubuntu_agent.database import Database
 from ubuntu_agent.models import Actor
-from ubuntu_agent.provider_config import ProviderConfig
+from ubuntu_agent.provider_config import ProviderConfig, _project_env_value
 from ubuntu_agent.providers import (
     GeminiProvider,
     OllamaProvider,
@@ -233,6 +233,21 @@ class ProviderTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True), \
                 patch("ubuntu_agent.provider_config._project_env_value", return_value="dotenv-only"):
             self.assertEqual("dotenv-only", ProviderConfig.from_environment().gemini_api_key)
+
+    def test_project_env_lookup_supports_monorepo_root_and_backend_env_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            backend = root / "backend"
+            package = backend / "ubuntu_agent"
+            package.mkdir(parents=True)
+            root_env = root / ".env"
+            backend_env = backend / ".env"
+            backend_env.write_text("GEMINI_API_KEY=backend-placeholder\n", encoding="utf-8")
+
+            with patch("ubuntu_agent.provider_config.__file__", str(package / "provider_config.py")):
+                self.assertEqual("backend-placeholder", _project_env_value("GEMINI_API_KEY"))
+                root_env.write_text("GEMINI_API_KEY='root-placeholder'\n", encoding="utf-8")
+                self.assertEqual("root-placeholder", _project_env_value("GEMINI_API_KEY"))
 
     def test_manual_task_cli_does_not_load_or_require_provider_configuration(self):
         with tempfile.TemporaryDirectory() as temp:
