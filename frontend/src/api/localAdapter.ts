@@ -3,8 +3,9 @@ import { Task, Reminder, AILoopSession, ConversationMessage, ConversationSummary
 import { TaskFilterParams, CreateTaskPayload, UpdateTaskPayload, CreateAILoopPayload, PostLoopMessagePayload } from './types';
 
 const PREFIX = '/api/v1';
+declare const __LARA_LOCAL_DEMO__: boolean;
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${PREFIX}${path}`, { credentials: 'same-origin', ...init,
+  const response = await fetch(`${PREFIX}${path}`, { credentials: __LARA_LOCAL_DEMO__ ? 'omit' : 'same-origin', ...init,
     headers: { 'Content-Type': 'application/json', ...init.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

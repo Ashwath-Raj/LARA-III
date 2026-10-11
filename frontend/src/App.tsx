@@ -4,11 +4,28 @@ import { Shell } from './components/layout/Shell';
 import { StartupIntro } from './components/StartupIntro';
 import { LocalUbuntuAgentApi } from './api/localAdapter';
 
+declare const __LARA_LOCAL_DEMO__: boolean;
+
 function LocalPairing() {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
-  useEffect(() => { new LocalUbuntuAgentApi().session().then(() => setConnected(true)).catch(() => setConnected(false)); }, []);
+  useEffect(() => {
+    if (__LARA_LOCAL_DEMO__) {
+      fetch('/api/v1/health', { credentials: 'same-origin' })
+        .then((response) => { if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}.`); setConnected(true); })
+        .catch((reason: unknown) => { setError(reason instanceof Error ? reason.message : 'Local backend is unavailable. Start it with scripts/start-lara-local.sh.'); setConnected(false); });
+      return;
+    }
+    new LocalUbuntuAgentApi().session().then(() => setConnected(true)).catch(() => setConnected(false));
+  }, []);
+  if (__LARA_LOCAL_DEMO__) {
+    if (connected !== false) return null;
+    return <div role="alert" style={{ position:'fixed', inset:'auto 20px 20px', zIndex:10000, padding:18, borderRadius:12, background:'#421f22', color:'#fff' }}>
+      <strong>Local backend unavailable.</strong> {error || 'Start the backend and try again.'}
+      <button type="button" onClick={() => { setConnected(null); setError(''); fetch('/api/v1/health', { credentials:'same-origin' }).then((response) => { if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}.`); setConnected(true); }).catch((reason: unknown) => { setError(reason instanceof Error ? reason.message : 'Backend is unavailable.'); setConnected(false); }); }}>Retry</button>
+    </div>;
+  }
   if (connected !== false) return null;
   const pair = async (event: React.FormEvent) => {
     event.preventDefault(); setError('');
