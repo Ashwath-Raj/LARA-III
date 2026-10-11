@@ -29,19 +29,23 @@ Apply user-only permissions to sensitive directories. Never commit the database,
 
 An unavailable model must not prevent users from viewing or manually editing stored tasks. An unavailable database must prevent mutations and agent execution.
 
+The optional interactive API process is started explicitly with `python -m ubuntu_agent --db PATH api-serve`; it binds to `127.0.0.1` and does not install a service or startup entry. Issue browser pairing tokens from the same database with `api-session-create`, configure exact localhost origins via `UBUNTU_AGENT_API_ORIGINS`, and exchange each token once. The API's synchronous loop routes are not worker dispatch and may be safely checkpointed with `invocation_limit`.
+
 ## Persistent reminders
 
 The scheduler must be database-driven, not a collection of in-memory timers.
 
 - Persist scheduled time, rule snapshot, channel and delivery state.
-- On startup, find due reminders that were not delivered and classify them as `missed`, `due_now` or `expired` according to configured policy.
-- Do not deliver duplicates after a restart. Use an atomic claim/lease and a unique delivery identifier.
+- Reconciliation finds every overdue scheduled/snoozed occurrence and idempotently queues it; `due_now` is a derived API view. This phase has no expiry cutoff, so overdue reminders are recovered rather than discarded.
+- Queue claims use an atomic SQLite lease and generation-scoped idempotency key. A crash after display but before success persistence can produce a duplicate; desktop delivery is at-least-once across that failure window, not exactly-once.
 - Recompute future reminders when task due dates or reminder rules change.
 - Cancel stale reminders transactionally with the update that replaces them.
-- Store delivery attempts and failure reasons.
+- Store delivery attempts and sanitized failure classes. A terminal delivery failure changes the current occurrence to `missed`; it remains visible and can be snoozed or dismissed.
 - When the desktop session was asleep/offline, surface missed reminders after launch; do not imply a notification was delivered while the session was unavailable.
 
 ## Durable overnight jobs
+
+The Phase 4 queue permits at most five total attempts per job. Retry delay is `min(30 seconds × 2^(attempt−1), 3600 seconds)`; lease-expiry recovery consumes an attempt. Jobs that exhaust the limit enter terminal `failed` state with a sanitized error class. This is the local dead-letter state and is inspectable with `jobs`.
 
 Every job must persist:
 
@@ -67,6 +71,18 @@ After each meaningful step, save output references, verification status, audit e
 - **Budget exhausted or repeated identical failure:** stop and report the blocker.
 - **Global pause active:** dispatch no new tools; in-flight tools must be cancelled where supported and marked uncertain if cancellation cannot be confirmed.
 
+### AI Loop recovery
+
+The AI Loop is not dispatched through the general job queue. `loop-run` and `loop-resume` execute synchronously against `loop_execution_state` and `loop_rounds`:
+
+- Each individual model invocation has a stable ID, role-specific input/output, provider/model provenance, and a persisted status.
+- A completed invocation and the remaining role plan are committed together. After a process exits between roles, run `python -m ubuntu_agent --db PATH loop-resume LOOP_ID`; completed roles are loaded rather than called again.
+- SQLite leases prevent a second process from taking an active loop. A valid lease causes a conflict, not duplicate execution.
+- An expired lease with no active role can safely return to `waiting`. An expired lease with an active role has an unknown inference outcome; mark it failed, set the loop to `review_required`, and do not automatically repeat it.
+- Cancellation is persisted in the same lifecycle row and dominates a late model response. It cannot guarantee interruption of a local inference request already in progress.
+- `max_rounds` limits total model invocations (4-12), not debate cycles. Model failures are terminal for that loop; no implicit retries or cloud fallback are performed. A reviewer `revise` verdict gets at most one bounded Blue Team/Judge revision, followed by a Reviewer call only if budget remains.
+- Stale/review-required or failed loops must be inspected by the user; existing legacy synthesized loops migrated without role-specific invocations are classified `review_required`, not retroactively treated as four-role successes.
+
 ## Pause and kill switch
 
 Provide:
@@ -77,6 +93,10 @@ Provide:
 - Read-only safe mode: allow task viewing, report inspection and policy explanation while agent execution remains disabled.
 
 The kill switch must be enforced in the executor/dispatcher, not merely by hiding UI buttons. UI and CLI should show whether work is running, paused or potentially in-flight. A kill request cannot guarantee that a remote action already accepted by a provider is reversible.
+
+Global pause holds autonomy/action jobs but permits safe local reminder notifications to continue. Emergency kill blocks all dispatch, including reminder notifications, until the local user runs `autonomy-recover`. Pending work remains persisted. Reminder delivery is at-least-once across a crash: if the desktop notification appears and the process stops before recording success, it can be shown again after lease recovery; exactly-once desktop delivery is not guaranteed.
+
+Run the foreground scheduler explicitly. First run `python -m ubuntu_agent reminders-reconcile`, then `python -m ubuntu_agent worker --interval-seconds 5`. For a bounded pass use `python -m ubuntu_agent worker --once`. `Ctrl-C` stops the foreground loop; unstarted claimed work is released and in-flight work is allowed to finish or recover through lease expiry. No service or startup entry is installed by the CLI.
 
 ## Logs and observability
 

@@ -28,11 +28,13 @@ Verification + Audit + Checkpoints + Reports + Notifications
 SQLite structured state + Qdrant local semantic index
 ```
 
+Dependency direction is from interfaces toward domain services: task/reminder domain and persistence do not import Ollama, Qdrant, FastAPI, or frontend code. Model parsing is an optional adapter; manual typed task operations remain available without it. The memory service depends on storage and embedding interfaces, and the policy interface is injected at every protected read/disclosure boundary.
+
 ## Components and responsibilities
 
 ### CLI and local dashboard
 
-- CLI is the first supported interaction surface; a local dashboard may expose the same application services through FastAPI.
+- The CLI and authenticated loopback FastAPI adapter call the same application services. The API binds to `127.0.0.1`; it does not provide a separate business-logic path.
 - UI code must call application services, not edit SQLite tables directly.
 - The dashboard displays proposals, task state, approval requests and execution evidence. It is not itself a security boundary.
 
@@ -54,6 +56,10 @@ Suggested lifecycle:
 Alternative states: `paused`, `blocked`, `failed`, `cancelled`, `needs_attention`.
 
 The lifecycle can revisit `running` after approval. Use explicit transitions; do not infer state from free-form model text. Each side-effecting step must have an idempotency strategy or a recovery procedure for uncertain outcomes.
+
+The Phase 4 SQLite job queue provides idempotent enqueue, typed payload revalidation, leases, capped retries, cancellation, pause/kill checks and a bounded foreground worker. Its implemented handler set is deliberately limited to local reminder delivery. The queue and handler registry are not a generic shell or browser execution interface.
+
+The AI Loop runs synchronously in the invoking CLI/API process and uses its own per-loop SQLite lease because no loop job handler exists. It persists an invocation record before each local model call and commits the result plus next pending step before releasing the lease. The total invocation budget is strict. A restart between calls resumes from the next pending role without replaying completed invocations; a stale in-flight call is treated as uncertain and requires review. The HTTP run/resume calls wait for their bounded invocation request; they are not background jobs.
 
 ### Policy and approvals
 
@@ -82,7 +88,11 @@ The model may only request tools exposed in its current context. Tool implementa
 
 ### Memory service
 
-Provides room-aware document retrieval, graph traversal and provenance. It calls policy checks before results are returned. SQLite stores structured facts/relationships and Qdrant stores semantic vectors; neither is allowed to widen access.
+Owns source/document ingestion, local embedding, chunk/version lifecycle, Qdrant candidate search, SQLite-authoritative content/provenance lookup, graph traversal and citation assembly. It calls the deterministic policy service before reads and disclosures. SQLite stores authoritative room, sensitivity, source, document/chunk and graph records; Qdrant stores candidate vectors and filter metadata. Neither store grants access or may widen policy scope. Update/deletion behavior follows `03_DATA_AND_CHUNKING.md`; incomplete indexing/deletion makes affected records unavailable until reconciliation.
+
+### Policy service
+
+Implements the deterministic `AccessContext -> PolicyDecision` interface in `04_SECURITY_PIPELINE.md` using the canonical defaults in `09_AUTONOMY_POLICY_MATRIX.md`. It returns policy-derived resource filters for memory queries; user interfaces, model output and provider adapters cannot supply or expand those filters.
 
 ### Integration adapters
 
@@ -103,6 +113,9 @@ Audit stores safe action evidence; reports summarize a job's outputs and uncerta
 - Tool adapters must not directly query application database tables; they return typed data to application services.
 - UI actions must go through the same services and policy pipeline as autonomous actions.
 - Memory retrieval must check access before returning content.
+- Task and reminder domain services must run without Ollama, Qdrant or provider credentials. They may depend on SQLite and deterministic validation only. Task records still carry a valid room reference so authorization is not bolted on later.
+- Embedding is behind an adapter and defaults to local execution. The memory service and task service must not import a specific embedding runtime or Qdrant SDK directly; provider/index adapters implement replaceable interfaces.
+- Any graph/vector result used to construct a model prompt is authorized by the memory service and checked again by model routing against the destination provider.
 - Integrations must be replaceable without changing task and job domain models.
 - The application must support a local-only configuration with hosted providers disabled.
 
@@ -144,3 +157,11 @@ Use a single-user local process first:
 - Local report/artifact directory
 
 Split into separate processes only when reliability, permissions or resource isolation justify it. Keep secrets and runtime data outside the source tree.
+
+## Delivery phases and Phase 1 security floor
+
+**Phase 1 (task core):** implement SQLite `rooms` and `personas` records (or equivalent versioned bootstrap records), stable IDs, validated sensitivity labels, trusted actor/persona context, room ownership on every personal/task record, action and risk enums, and the deterministic policy interface with deny-by-default behavior. Encode the default persona/room/action rules from `09_AUTONOMY_POLICY_MATRIX.md`; do not add user-configurable grants until their persistence and revocation semantics are specified. Make policy checks part of task, file-attachment and reminder service entry points. Local-only is the only available model destination until provider disclosure checks exist. Manual task CRUD must work when Ollama and Qdrant are absent.
+
+**Phase 2 (guarded tools and providers):** route every registered tool and provider request through policy and approval enforcement, including exact-action approvals and destination checks.
+
+**Phase 3 (RAG):** add sources, documents, versioned chunks, local embedding adapter, Qdrant index, graph access, citations/provenance, deletion reconciliation and cross-room bridge projection per `03_DATA_AND_CHUNKING.md` and `04_SECURITY_PIPELINE.md`. RAG must not be a prerequisite for the task service.

@@ -22,7 +22,7 @@ Integration availability is configuration-dependent. Do not assume a model, API 
 | Git | Branch/worktree, diff, tests and rollback for tracked code | Operate only in configured repositories | Check dirty state before work; never overwrite user changes; Git does not reverse external side effects or protect all untracked files |
 | Qdrant local mode | Semantic search over allowed document chunks | Local storage, room-filtered payloads and access re-check before returning content | Degrade to permitted metadata/keyword search; never bypass room checks when unavailable |
 | SQLite | Structured tasks, reminders, approvals, jobs, audit metadata and graph relations | Local application-data directory with OS permissions | Migrations, foreign keys, transactions, backup/restore tests and integrity checks |
-| Ubuntu notifications | Deadline, approval, blocker and completion nudges | Local desktop session | Persist notification state; recover missed events on resume; do not claim delivery if the desktop subsystem reports failure |
+| Ubuntu notifications | Local reminder nudges through `/usr/bin/notify-send` | Local desktop session | Fixed argv, `shell=False`, bounded text and timeout; unavailable delivery retries then becomes `missed`; crash after display and before persistence may duplicate delivery |
 | MCP tool servers | Future common connector protocol | Each server has separate trust and permissions | Register servers explicitly, inspect tool schemas, apply the same policy checks, restrict network and filesystem scope |
 
 ## Google Classroom workflow

@@ -23,6 +23,28 @@ Every tool call must pass through this sequence, including calls made by a perso
 
 No alternate execution path may bypass this pipeline.
 
+## Deterministic permission decision contract
+
+All protected reads and writes use one policy interface; callers cannot ask the model to decide access or assert their own scope.
+
+`evaluate_access(context: AccessContext) -> PolicyDecision`
+
+`AccessContext` is built from trusted application state and contains: `principal_id`, `persona_id`, nullable `job_id`, `room_id`, `resource_id` (or a typed resource scope), `action_id`, `sensitivity_label`, `destination` (`local` or a configured provider/service ID), `risk_tier`, current `system_mode`, and any approval reference. For multi-resource operations, evaluate each resource and require all decisions to allow. Missing/unknown identity, room, sensitivity, destination, resource ownership or risk is a denial.
+
+`PolicyDecision` contains `decision` (`allow`, `deny`, `requires_approval`), `policy_id`/version, a sanitized reason, decision time, and an effective scope/filter when applicable. Only trusted policy code can create the filter. Clients and models cannot widen it. `requires_approval` stops before the side effect; it is not an allow.
+
+The policy evaluator applies hard denies first, then the defaults in `09_AUTONOMY_POLICY_MATRIX.md`, explicit user grants, task/job scope and destination constraints. The executor re-evaluates immediately before any side effect. For reads, authorization must precede returning content or metadata. Denials must not disclose whether a protected resource exists, its title, count, citation, or room label.
+
+### Enforcement points
+
+- **Graph:** authorize the requested node and its room before lookup results are exposed; authorize both endpoint nodes and the edge before returning an edge or neighborhood. Apply filters in the data query where possible and re-check each result before serialization.
+- **Vector/RAG:** policy derives the Qdrant room/resource filter before search. Qdrant results are untrusted candidate IDs; fetch active records and text from SQLite and re-check authorization before ranking, snippet generation, citation construction or counts.
+- **Model routing:** evaluate the task and each context item against the selected provider before prompt assembly, then re-check the assembled disclosure set immediately before send. Denial blocks that route; no silent provider fallback.
+- **Tools:** validate typed tool arguments, build trusted context, evaluate policy, validate preconditions, enforce approval, and re-check policy/approval immediately before invoking the narrow adapter.
+- **Cross-room bridges:** authorize the source and bridge grant, confirm destination, purpose, field allowlist, expiry and revocation, then expose only projected fields. A bridge never grants graph traversal into its source room or cloud use unless its separate policy permits it.
+
+Missing room or sensitivity metadata is not inferred from the caller, model output, Qdrant payload or a display name. Treat such records as quarantined/unavailable until trusted metadata is repaired. Policy service failure, malformed context or an unknown action/risk is fail-closed.
+
 ## Risk tiers
 
 | Tier | Meaning | Default handling |
@@ -46,6 +68,8 @@ An approval must be specific and short-lived. Persist at least:
 - requesting principal and approving user
 - policy rule/version that required or allowed the action
 - creation time, expiry, decision and execution status
+
+The local prototype identity is the configured single OS user's `local-user` application identity. The CLI has no independent login or authenticated approver ceremony; approval decisions are attributable to that local application identity only, not strongly authenticated distinct people. Approval does not add an action to the implementation registry. In Phase 4, no Classroom submission, external message, shell, deletion, privileged system operation, browser action, or other unimplemented handler is executable, even if an approval row exists.
 
 Any change to the tool name, target, file, recipient, course, assignment, command or material argument invalidates the approval. Consuming an approval is atomic so two workers cannot execute it twice. Never reuse an approval across retries that could produce a new external side effect unless the adapter can prove the original action did not occur and policy explicitly allows safe retry.
 
@@ -88,3 +112,4 @@ Controls:
 - Browser state changed unexpectedly: pause rather than guess.
 - Repeated identical failure: stop retrying and report the blocker.
 - Global pause/kill switch activated: stop dispatching new actions and interrupt cancellable work. Record any currently in-flight external action as potentially uncertain.
+- Room or sensitivity metadata missing/inconsistent, or SQLite authorization re-check unavailable: deny the read and do not expose snippets, graph labels, citations, counts or cloud prompt content. Qdrant availability never substitutes for the authoritative access check.
