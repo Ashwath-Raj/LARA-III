@@ -1,152 +1,313 @@
 # LARA IV
+### Local-First Agentic Runtime Accelerator
 
-LARA IV is a local-first productivity workspace with a React/Vite frontend and a
-Python API backed by SQLite. Its local Ollama chat and AI Loops are optional;
-task, reminder, and conversation data persist locally.
+**A local-first runtime for orchestrating AI agents, language models, persistent memory, tools, and intelligent workflows.**
 
-## Repository layout
+LARA IV is a local-first agentic runtime designed to bring AI inference, multi-agent orchestration, contextual memory, and workflow execution into one integrated environment. It combines locally hosted language models with persistent state, semantic retrieval, and structured agent collaboration to help developers build and operate AI-powered workflows with greater control over their data and execution environment.
 
-- `backend/` — FastAPI API, SQLite schema and migrations, services, CLI, and tests.
-- `frontend/` — React/Vite application, UI assets, local API adapter, and mock fixtures.
-- `scripts/` — local development launchers.
-- `Docs/` — product, security, API, data, and operations specifications.
+Rather than treating AI as a collection of disconnected chat interfaces, LARA IV focuses on the runtime layer: connecting models, context, agents, and actions into a coordinated system.
 
-## Requirements
+**Repository:** [Ashwath-Raj/LARA-III](https://github.com/Ashwath-Raj/LARA-III)
 
-- Python 3.11 or newer
-- Node.js 20.19+ or 22.12+ (required by Vite 8)
-- npm
-- Optional for local inference: [Ollama](https://ollama.com/)
-- Optional for retrieval-backed memory: the Qdrant client extra and Ollama's
-  `embeddinggemma` model. Qdrant uses local embedded storage; no separate server
-  is required.
+---
 
-## Install
+## Overview
 
-From the repository root:
+Modern AI applications often depend on remote inference services, fragmented context, and disconnected tools. LARA IV explores a different approach: a local-first runtime in which models, memory, agent workflows, and application state work together within a unified system.
 
-```sh
-python3 -m venv backend/.venv
-backend/.venv/bin/python -m pip install --upgrade pip
-backend/.venv/bin/python -m pip install -e 'backend[test]'
-npm --prefix frontend ci
-cp .env.example .env
+The project is built around four principles:
+
+- **Local-first execution:** Run supported language models locally through Ollama.
+- **Agentic orchestration:** Structure AI work into coordinated roles, workflows, and review stages.
+- **Persistent context:** Connect conversations and knowledge with local storage and semantic retrieval.
+- **Controlled tool use:** Integrate AI workflows with application capabilities while maintaining explicit execution boundaries.
+
+LARA IV is both an AI runtime foundation and an environment for developing, testing, and operating local agentic systems.
+
+## Core Capabilities
+
+### Local Model Runtime
+
+Integrate locally hosted language models through Ollama for inference without requiring a remote model API for supported workflows.
+
+The runtime can be configured around available models, hardware resources, and the needs of individual tasks.
+
+### Multi-Agent Orchestration
+
+LARA IV includes a structured four-role AI Loop:
+
+| Agent role | Responsibility |
+|---|---|
+| **Blue Team** | Proposes an approach or solution. |
+| **Red Team** | Challenges assumptions and identifies weaknesses. |
+| **Judge** | Synthesizes the arguments into a decision. |
+| **Unbiased Reviewer** | Audits the reasoning and final result. |
+
+This structure provides a foundation for adversarial review, multi-perspective reasoning, and more deliberate AI-assisted decision-making.
+
+Actual execution depends on the configured model provider and successful completion of each workflow stage.
+
+### Persistent Memory and Semantic Retrieval
+
+Support contextual AI workflows with persisted conversations, knowledge records, embeddings, and semantic retrieval.
+
+The intended workflow is to make relevant information available beyond an individual prompt, subject to memory configuration and successful indexing.
+
+Conversation history and long-term memory are separate capabilities: saving a conversation does not necessarily mean its contents have been indexed for future retrieval.
+
+### Agent Workflows and Tools
+
+Connect agent reasoning to application operations and supported tools. The application includes task management, project organization, reminders, calendar events, and related workflow interfaces that can support broader agentic use cases.
+
+Tool execution and desktop automation must respect the configured permissions and runtime environment.
+
+### Runtime Observability and Persistence
+
+Use persistent application records and execution state to inspect conversations, tasks, agent sessions, and workflow results where supported by the current implementation.
+
+SQLite provides the application's core persistence layer, while local model inference and knowledge retrieval use their respective configured services.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    U[User or Application] --> UI[LARA IV Interface]
+    UI --> API[Local Runtime API]
+    API --> O[Agent Orchestrator]
+    O --> M[Ollama Model Runtime]
+    M --> G[Gemma]
+    O --> T[Tools and Workflow Operations]
+    API --> DB[(SQLite Persistence)]
+    O --> C[Context and Memory Services]
+    C --> E[EmbeddingGemma]
+    C --> V[Local Vector Storage]
+    DB --> O
 ```
 
-Edit `.env` only if you need optional provider settings. It is ignored by Git.
-The `GEMINI_API_KEY` entry is optional; the normal local workflow uses Ollama
-and does not require a cloud key.
+The high-level architecture separates the interface, application API, agent orchestration, model inference, persistence, and memory services.
 
-To enable local chat and AI Loop inference, install/start Ollama and fetch the
-default model:
+The diagram represents the intended component relationships; specific runtime capabilities depend on the implemented integrations and configuration.
 
-```sh
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Frontend | React, TypeScript, Vite |
+| Backend API | Python, FastAPI |
+| Persistent application data | SQLite |
+| Local inference | Ollama |
+| Chat model configuration | Gemma 4 E2B, quantized |
+| Embeddings | EmbeddingGemma |
+| Semantic retrieval | Local embedding and vector-storage services |
+| Automated testing | pytest and frontend build/lint tooling |
+
+## Local Models
+
+The current local setup uses these Ollama models:
+
+| Model | Purpose | Identifier |
+|---|---|---|
+| Gemma 4 E2B, instruction-tuned and quantized | Local chat and inference | `gemma4:e2b-it-q4_K_M` |
+| EmbeddingGemma | Text embeddings for semantic retrieval | `embeddinggemma:latest` |
+
+Install the models with:
+
+```bash
 ollama pull gemma4:e2b-it-q4_K_M
-```
-
-To enable local conversational retrieval memory, install its optional backend
-dependency and fetch the embedding model:
-
-```sh
-backend/.venv/bin/python -m pip install -e 'backend[rag]'
 ollama pull embeddinggemma
 ```
 
-Without the optional Qdrant client or embedding model, the API remains available
-and reports memory readiness as degraded.
+Check installed models:
 
-## Run locally
+```bash
+ollama list
+```
 
-```sh
+The models run through Ollama. Availability of a model does not, by itself, guarantee that every agent workflow, memory operation, or tool integration is fully operational.
+
+## Getting Started
+
+### Prerequisites
+
+- Ubuntu or a compatible Linux environment.
+- Python compatible with the backend's dependency configuration.
+- Node.js and npm compatible with the frontend.
+- Ollama.
+- Sufficient RAM, storage, and compute resources for the selected models.
+
+Check the installed tools:
+
+```bash
+python3 --version
+node --version
+npm --version
+ollama --version
+```
+
+### Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/Ashwath-Raj/LARA-III.git
+cd LARA-III
+```
+
+Set up the Python environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+Install backend dependencies using the dependency manifest provided by the repository.
+
+Install frontend dependencies:
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+If the repository contains a `package-lock.json`, use `npm ci` for reproducible frontend dependency installation.
+
+Start Ollama and ensure the required models are installed. Review the environment examples and configuration files before starting the application.
+
+### Run Locally
+
+From the repository root, use the local development launcher:
+
+```bash
 ./scripts/start-lara-local.sh
 ```
 
-Open <http://127.0.0.1:5173>. The launcher uses explicit local-demo mode, binds
-the API and Vite to loopback only, waits for both HTTP services to become ready,
-and stops both processes on exit or Ctrl+C. It does not open a pairing dialog or
-start ngrok. It uses `LARA_DB_PATH` when set; otherwise it stores the SQLite
-database at `${XDG_DATA_HOME:-~/.local/share}/ubuntu-agent/lara-demo.sqlite3`.
-The launcher runs schema initialization against that selected database without
-resetting its contents.
-The default ports are 8765 (API) and 5173 (frontend); set `LARA_API_PORT` or
-`LARA_FRONTEND_PORT` to use alternate ports when those defaults are occupied.
+Open:
 
-To choose a disposable database for a demo, set the path before starting:
+**http://127.0.0.1:5173**
 
-```sh
-mkdir -p /tmp/lara-iv-demo
-LARA_DB_PATH=/tmp/lara-iv-demo/lara.sqlite3 ./scripts/start-lara-local.sh
+The expected development architecture uses a frontend on port `5173` and a backend API on `127.0.0.1:8765`, subject to the repository's current configuration.
+
+Use `Ctrl+C` to stop the services.
+
+No public tunnel is required for normal localhost development.
+
+## Demo Environment
+
+LARA IV provides an explicit demo-data seeding workflow for developing and evaluating the interface with synthetic records.
+
+An example command from the current development setup is:
+
+```bash
+.venv/bin/python -m ubuntu_agent \
+  --db "${XDG_DATA_HOME:-$HOME/.local/share}/ubuntu-agent/lara-demo.sqlite3" \
+  seed-demo --index-knowledge
 ```
 
-## Demo data
+Check the repository's current CLI and startup configuration before running the command.
 
-Seeding is an explicit CLI operation; it never clears the chosen database.
-Repeated seeding is idempotent, preserves edits and non-demo records, and adds
-synthetic tasks, conversations, reminders, projects, calendar events, and sample
-AI Loop records without running inference:
+Demo records may include projects, tasks, conversations, reminders, calendar events, knowledge notes, and illustrative AI Loop sessions.
 
-```sh
-backend/.venv/bin/python -m ubuntu_agent \
-  --db /tmp/lara-iv-demo/lara.sqlite3 \
-  seed-demo --environment development
-backend/.venv/bin/python -m ubuntu_agent \
-  --db /tmp/lara-iv-demo/lara.sqlite3 demo-status
+**Synthetic demo records must not be confused with actual user activity or live model-generated outputs.** Seed into the intended demo database rather than a database containing important user data.
+
+## Development and Testing
+
+Run the backend tests:
+
+```bash
+.venv/bin/python -m pytest -q
 ```
 
-Use a new disposable path when you want a clean demo. Never point destructive
-experiments at a database containing user data.
+Build the frontend and run lint checks:
 
-## Development and tests
-
-Run the complete backend test suite:
-
-```sh
-backend/.venv/bin/python -m pytest backend/tests
+```bash
+cd frontend
+npm run build
+npm run lint
 ```
 
-Compile backend modules and check whitespace:
+Useful areas for regression testing include:
 
-```sh
-backend/.venv/bin/python -m compileall -q backend/ubuntu_agent backend/tests
-git diff --check
+- Agent Loop execution and output persistence.
+- Conversation and task persistence.
+- Task and sticky-note create/edit flows.
+- Database migrations and integrity.
+- Memory indexing and retrieval.
+- Model availability and provider errors.
+- API authentication, permissions, and local-origin restrictions.
+
+Distinguish synthetic fixture tests from tests that invoke real local models. A successful frontend build does not establish that live inference and every runtime integration are working.
+
+## Project Structure
+
+The intended consolidated repository structure is:
+
+```text
+LARA-III/
+├── frontend/
+│   ├── src/
+│   ├── public/
+│   └── package.json
+├── ubuntu_agent/
+│   ├── api.py
+│   ├── database.py
+│   ├── services.py
+│   └── ...
+├── scripts/
+│   └── start-lara-local.sh
+├── tests/
+├── README.md
+└── .gitignore
 ```
 
-Build and lint the frontend:
+Use the actual checked-in directory structure as the source of truth; additional modules, migrations, configuration, and test files may exist.
 
-```sh
-LARA_LOCAL_DEMO=1 npm --prefix frontend run build
-npm --prefix frontend run lint
-```
+## Privacy and Security
 
-The API and frontend are separate dev servers: run the backend CLI with
-`api-serve --host 127.0.0.1 --port 8765` from `backend/`, then run Vite from
-`frontend/` with `npm run dev -- --host 127.0.0.1 --port 5173`. Vite proxies
-`/api` to the loopback backend. The integrated launcher configures this for you.
+LARA IV is designed around local-first operation, but privacy depends on the entire deployment configuration.
 
-## Configuration and security
+- Bind local development services to loopback interfaces.
+- Keep authentication enabled for non-demo deployments.
+- Do not commit API keys, credentials, session tokens, or private environment files.
+- Exclude local databases, personal backups, model weights, virtual environments, and generated dependencies from Git.
+- Treat synthetic demo data separately from personal or production data.
+- Respect memory exclusions and configured tool permissions.
+- Review external integrations and network requests before describing a workflow as completely offline.
 
-`LARA_LOCAL_DEMO=1` is reserved for the local launcher and requires loopback
-binding plus an explicitly configured local frontend origin. Outside that mode,
-the API's pairing, origin checks, and other deployment protections remain
-enabled. Do not expose the local API to untrusted callers.
+## Roadmap
 
-Useful optional settings include `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`,
-`UBUNTU_AGENT_OLLAMA_URL`, `UBUNTU_AGENT_EMBEDDING_MODEL`, and `GEMINI_API_KEY`.
-The backend reads `GEMINI_API_KEY` from the process environment or the root
-`.env` file; provider status never prints credential values. Never commit `.env`,
-database files, local vector stores, model weights, virtual environments, or
-`node_modules`.
+Potential areas for continued development include:
 
-## Troubleshooting
+- More robust agent orchestration, retries, cancellation, and recovery.
+- Improved runtime observability and per-agent execution traces.
+- More reliable cross-conversation memory and retrieval.
+- Better model/provider configuration and health reporting.
+- Expanded tool interfaces and explicit approval boundaries.
+- End-to-end evaluation of agent workflows using real local inference.
+- Deployment hardening and reproducible installation.
 
-- **Missing Python environment or packages:** repeat the Python setup commands
-  above from the repository root.
-- **Missing Vite executable:** run `npm --prefix frontend ci`.
-- **Port 8765 or 5173 is occupied:** stop the process already using the port,
-  then retry.
-- **Chat or AI Loops report inference unavailable:** start Ollama and pull the
-  configured model. The rest of the local application remains usable.
-- **Memory readiness is degraded:** check that the configured local Ollama
-  embedding model and Qdrant service are available.
-- **Browser shows no backend:** use the root launcher so the Vite `/api` proxy
-  and matching loopback CORS origin are configured together.
+These are potential areas for improvement, not claims that every capability is already complete.
+
+## Contributing
+
+Contributions and focused improvements are welcome.
+
+1. Inspect the existing implementation and open issues.
+2. Create a feature branch.
+3. Keep changes focused and add regression tests.
+4. Run relevant backend tests, frontend build, and lint checks.
+5. Review changes for secrets, personal data, generated files, and unrelated modifications.
+6. Document the actual behavior and known limitations in the pull request.
+
+## License
+
+Check the repository for an existing `LICENSE` file. If the repository has no license, the licensing terms remain undecided; public visibility alone does not grant permission to reuse the project.
+
+---
+
+**LARA IV — Local-First Agentic Runtime Accelerator**
+
+*Local models. Persistent context. Coordinated agents. Controlled execution.*
