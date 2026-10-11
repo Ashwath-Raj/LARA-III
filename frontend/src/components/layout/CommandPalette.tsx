@@ -57,7 +57,7 @@ export const CommandPalette: React.FC = () => {
     {
       id: 'action-quick-capture',
       title: 'Quick Capture New Task',
-      subtitle: 'Create a raw task with simulated NLP parsing',
+      subtitle: 'Create a saved task in the local SQLite database',
       icon: <Plus size={16} color="var(--cerulean)" />,
       category: 'Actions',
       action: () => {
@@ -102,7 +102,7 @@ export const CommandPalette: React.FC = () => {
     {
       id: 'nav-workbench',
       title: 'Go to Agent Workbench',
-      subtitle: 'Simulated multi-turn prompt canvas and tool traces',
+      subtitle: 'Local model chat; tools and memory search are unavailable',
       icon: <TerminalSquare size={16} />,
       category: 'Screens',
       action: () => {

@@ -4,14 +4,14 @@ import { useAgent } from '../context/AgentContext';
 import { RoomBadge, StatusBadge } from '../components/common/Badge';
 
 export const ProjectsWorkspace: React.FC = () => {
-  const { projects, tasks, openTaskDetail, updateProject } = useAgent();
+  const { projects, tasks, openTaskDetail, updateProject, createProject, deleteProject, updateTask } = useAgent();
   const [selectedProjectId, setSelectedProjectId] = useState<string>(projects[0]?.id || '');
+  const [error, setError] = useState('');
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || projects[0];
 
-  const projectTasks = tasks.filter((t) =>
-    selectedProject?.taskIds.includes(t.id) || t.room === selectedProject?.roomId
-  );
+  const projectTasks = tasks.filter((t) => t.project === selectedProject?.id);
+  const roomTasks = tasks.filter((t) => t.room === selectedProject?.roomId);
 
   const handleToggleMilestone = (milestoneId: string) => {
     if (!selectedProject) return;
@@ -20,7 +20,14 @@ export const ProjectsWorkspace: React.FC = () => {
         ? { ...m, completed: !m.completed }
         : m
     );
-    updateProject(selectedProject.id, { milestones: updatedMilestones });
+    void updateProject(selectedProject.id, { milestones: updatedMilestones }).catch(() => setError('Milestone could not be saved.'));
+  };
+
+  const handleCreateProject = async () => {
+    const name = window.prompt('Project name');
+    if (!name?.trim()) return;
+    try { const created = await createProject(name.trim()); setSelectedProjectId(created.id); setError(''); }
+    catch { setError('Project could not be saved. Check the local backend connection.'); }
   };
 
   return (
@@ -53,7 +60,11 @@ export const ProjectsWorkspace: React.FC = () => {
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
             {projects.length} ACTIVE
           </span>
+          <button type="button" className="u-btn u-btn-primary" onClick={() => void handleCreateProject()}>New project</button>
         </div>
+
+        {error && <p role="alert" style={{ color: 'var(--status-error)', fontSize: 13 }}>{error}</p>}
+        {!projects.length && <p role="status" style={{ color: 'var(--text-muted)', fontSize: 13 }}>No projects yet. Create one to organize related tasks.</p>}
 
         {projects.map((proj) => {
           const isSelected = proj.id === selectedProjectId;
@@ -151,6 +162,11 @@ export const ProjectsWorkspace: React.FC = () => {
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
               {selectedProject.description}
             </p>
+            <button type="button" className="u-btn u-btn-secondary" onClick={() => {
+              if (window.confirm(`Delete project “${selectedProject.name}”? Its tasks will remain without a project.`)) {
+                void deleteProject(selectedProject.id).then(() => setSelectedProjectId('')).catch(() => setError('Project could not be deleted.'));
+              }
+            }}>Delete project</button>
           </div>
 
           {/* Milestones Checklist */}
@@ -230,10 +246,9 @@ export const ProjectsWorkspace: React.FC = () => {
             </h2>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {projectTasks.map((t) => (
+              {roomTasks.map((t) => (
                 <div
                   key={t.id}
-                  onClick={() => openTaskDetail(t)}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -242,19 +257,23 @@ export const ProjectsWorkspace: React.FC = () => {
                     borderRadius: '6px',
                     border: '1px solid var(--border-subtle)',
                     backgroundColor: 'var(--surface-subtle)',
-                    cursor: 'pointer',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button type="button" onClick={() => openTaskDetail(t)} style={{ display: 'flex', alignItems: 'center', gap: '8px', border:0, background:'transparent', cursor:'pointer' }}>
                     <StatusBadge status={t.status} size="small" />
                     <span style={{ fontSize: '12.5px', fontWeight: 500, color: 'var(--onyx)' }}>
                       {t.title}
                     </span>
-                  </div>
-
-                  <ArrowRight size={14} color="var(--grey-olive)" />
+                    <ArrowRight size={14} color="var(--grey-olive)" />
+                  </button>
+                  <label className="sr-only" htmlFor={`project-task-${t.id}`}>Project for {t.title}</label>
+                  <select id={`project-task-${t.id}`} value={t.project || ''} onChange={(event) => void updateTask(t.id,{project:event.target.value || null}).catch(() => setError('Task project link could not be saved.'))}>
+                    <option value="">No project</option>
+                    {projects.filter((project) => project.roomId === t.room).map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+                  </select>
                 </div>
               ))}
+              {!roomTasks.length && <p style={{ color:'var(--text-muted)',fontSize:13 }}>Create or move a task into this project room to link it here.</p>}
             </div>
           </div>
         </div>

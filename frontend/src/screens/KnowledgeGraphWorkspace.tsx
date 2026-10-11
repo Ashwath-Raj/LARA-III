@@ -3,7 +3,7 @@ import type { ErrorInfo } from 'react';
 import type { ForceGraphMethods } from 'react-force-graph-3d';
 import { ArrowDownLeft, ArrowUpRight, Focus, LocateFixed, RotateCcw, Search, Share2, X } from 'lucide-react';
 import { useAgent } from '../context/AgentContext';
-import { adaptPrototypeGraph, GraphRecord, GraphRelation } from '../api/graphAdapter';
+import { adaptPersistedGraph, GraphRecord, GraphRelation } from '../api/graphAdapter';
 import { KnowledgeGraphEdge, KnowledgeGraphNode } from '../types';
 import { INITIAL_ROOMS } from '../data/mockData';
 
@@ -20,7 +20,7 @@ export function supportsWebGL() {
 }
 
 export interface GraphProps {
-  graph: ReturnType<typeof adaptPrototypeGraph>;
+  graph: ReturnType<typeof adaptPersistedGraph>;
   selectedNode: KnowledgeGraphNode | null;
   selectedEdge: KnowledgeGraphEdge | null;
   onSelectNode: (node: KnowledgeGraphNode) => void;
@@ -133,7 +133,7 @@ export const KnowledgeGraphWorkspace: React.FC = () => {
   const [webgl] = useState(supportsWebGL);
   const [retrying, setRetrying] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const graph = useMemo(() => adaptPrototypeGraph({ nodes: graphNodes, edges: graphEdges }), [graphNodes, graphEdges]);
+  const graph = useMemo(() => adaptPersistedGraph({ nodes: graphNodes, edges: graphEdges }), [graphNodes, graphEdges]);
   const filteredNodes = useMemo(() => {
     const needle = debouncedSearch.trim().toLocaleLowerCase();
     return graph.nodes.filter((node) => (typeFilter === 'all' || node.nodeType === typeFilter)
@@ -157,19 +157,19 @@ export const KnowledgeGraphWorkspace: React.FC = () => {
   const currentSelectedEdge = selectedEdge && graph.links.some((edge) => edge.id === selectedEdge.id) ? selectedEdge : null;
 
   return <section className="graph-workspace" aria-labelledby="graph-title">
-    <header className="graph-heading"><div><p className="ask-overline">PROJECTS &amp; MEMORY</p><h1 id="graph-title">Knowledge graph</h1><p>Explore relationships explicitly listed in the prototype records.</p></div>
-      <span className="graph-demo-label">Prototype data · not live memory</span></header>
-    <p className="graph-provenance-note">No authorized graph API is connected. This view uses bundled demo records only; filters are for exploration and do not enforce access policy.</p>
+    <header className="graph-heading"><div><p className="ask-overline">PROJECTS &amp; MEMORY</p><h1 id="graph-title">Knowledge graph</h1><p>Inspect authorized persisted memory relationships.</p></div>
+      <span className="graph-demo-label">LOCAL PERSISTED GRAPH</span></header>
+    <p className="graph-provenance-note">Nodes and relationships come from authorized persisted AI Loop records.</p>
     <div className="graph-toolbar">
       <label className="graph-search"><Search size={16} /><span className="sr-only">Search nodes and sources</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search nodes or sources" /></label>
       <label><span className="sr-only">Filter graph by entity type</span><select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="all">All types</option>{types.map((type) => <option key={type} value={type}>{type.replaceAll('_', ' ')}</option>)}</select></label>
       <label><span className="sr-only">Filter graph by room</span><select value={roomFilter} onChange={(event) => setRoomFilter(event.target.value)}><option value="all">All demo rooms</option>{INITIAL_ROOMS.filter((room) => graph.nodes.some((node) => node.roomId === room.id)).map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
       {selectedGraphNode && <button className="graph-clear-selection" onClick={() => { setSelectedGraphNode(null); setSelectedEdge(null); }}><X size={14} />Clear selection</button>}
     </div>
-    <div className="graph-summary"><span>{filteredNodes.length} demo nodes</span><span>{visibleEdges.length} explicit relations</span><span>3D orbit workspace</span></div>
-    {loading ? <div className="graph-empty" role="status"><Share2 size={20} /><h2>Loading prototype records</h2><p>Reading the bundled graph fixture.</p></div>
+    <div className="graph-summary"><span>{filteredNodes.length} stored nodes</span><span>{visibleEdges.length} stored relations</span><span>3D orbit workspace</span></div>
+    {loading ? <div className="graph-empty" role="status"><Share2 size={20} /><h2>Loading graph records</h2><p>Reading records from the local API.</p></div>
       : graphLoadError ? <div className="graph-empty" role="alert"><Share2 size={20} /><h2>Graph records could not be loaded</h2><p>{graphLoadError}</p><button disabled={retrying} onClick={() => { setRetrying(true); void refreshAll().finally(() => setRetrying(false)); }}>{retrying ? 'Retrying…' : 'Retry'}</button></div>
-      : !graph.nodes.length ? <div className="graph-empty"><Share2 size={20} /><h2>No prototype graph records</h2><p>When authorized graph data is available, this workspace can display its explicitly stored relationships.</p></div>
+      : !graph.nodes.length ? <div className="graph-empty"><Share2 size={20} /><h2>No graph records yet</h2><p>Run or inspect an AI Loop to create persisted graph nodes and relationships.</p></div>
       : !filteredNodes.length ? <div className="graph-empty"><Search size={20} /><h2>No matching records</h2><p>Clear the search or broaden the room and entity filters.</p><button onClick={() => { setSearch(''); setTypeFilter('all'); setRoomFilter('all'); }}>Clear filters</button></div>
         : <div className="graph-layout">
           <div className="graph-main-column">
@@ -188,14 +188,14 @@ export const KnowledgeGraphWorkspace: React.FC = () => {
           </div>
           <aside className="graph-detail-panel" aria-live="polite">
             {selected ? <><header><span className="graph-detail-type">{selected.nodeType} · {selected.roomId.replaceAll('_', ' ')}</span><button aria-label="Close node details" onClick={() => setSelectedGraphNode(null)}><X size={17} /></button></header>
-              <h2>{selected.displayName}</h2><p className="graph-detail-scope">Prototype fixture · not a verified persistent record</p>
-              <dl><div><dt>Source reference</dt><dd>{printableSource(selected.sourceRef)}</dd></div><div><dt>Last updated in fixture</dt><dd>{new Date(selected.lastUpdated).toLocaleString()}</dd></div>{Object.entries(selected.metadata).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') : String(value)}</dd></div>)}</dl>
-              <section className="graph-relations"><h3><ArrowDownLeft size={14} />Incoming ({incoming.length})</h3>{incoming.length ? incoming.map((edge) => <button key={edge.id} onClick={() => { setSelectedEdge(domainEdge(edge)); setSelectedGraphNode(null); }}><span>{graph.nodes.find((node) => node.id === edge.source)?.displayName}</span><small>{edge.relationType} → {selected.displayName}</small></button>) : <p>No incoming prototype relations.</p>}</section>
-              <section className="graph-relations"><h3><ArrowUpRight size={14} />Outgoing ({outgoing.length})</h3>{outgoing.length ? outgoing.map((edge) => <button key={edge.id} onClick={() => { setSelectedEdge(domainEdge(edge)); setSelectedGraphNode(null); }}><span>{edge.relationType} → {graph.nodes.find((node) => node.id === edge.target)?.displayName}</span><small>{edge.whyConnected}</small></button>) : <p>No outgoing prototype relations.</p>}</section>
+              <h2>{selected.displayName}</h2><p className="graph-detail-scope">Authorized stored record</p>
+                <dl><div><dt>Source reference</dt><dd>{printableSource(selected.sourceRef)}</dd></div><div><dt>Last updated</dt><dd>{new Date(selected.lastUpdated).toLocaleString()}</dd></div>{Object.entries(selected.metadata).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') : String(value)}</dd></div>)}</dl>
+              <section className="graph-relations"><h3><ArrowDownLeft size={14} />Incoming ({incoming.length})</h3>{incoming.length ? incoming.map((edge) => <button key={edge.id} onClick={() => { setSelectedEdge(domainEdge(edge)); setSelectedGraphNode(null); }}><span>{graph.nodes.find((node) => node.id === edge.source)?.displayName}</span><small>{edge.relationType} → {selected.displayName}</small></button>) : <p>No incoming persisted relations.</p>}</section>
+              <section className="graph-relations"><h3><ArrowUpRight size={14} />Outgoing ({outgoing.length})</h3>{outgoing.length ? outgoing.map((edge) => <button key={edge.id} onClick={() => { setSelectedEdge(domainEdge(edge)); setSelectedGraphNode(null); }}><span>{edge.relationType} → {graph.nodes.find((node) => node.id === edge.target)?.displayName}</span><small>{edge.whyConnected}</small></button>) : <p>No outgoing persisted relations.</p>}</section>
             </> : currentSelectedEdge ? <><header><span className="graph-detail-type">EXPLICIT PROTOTYPE RELATION</span><button aria-label="Close relation details" onClick={() => setSelectedEdge(null)}><X size={17} /></button></header>
               <h2>{graph.nodes.find((node) => node.id === currentSelectedEdge.sourceNodeId)?.displayName} → {graph.nodes.find((node) => node.id === currentSelectedEdge.targetNodeId)?.displayName}</h2>
-              <p className="graph-relation-name">{currentSelectedEdge.relationType}</p><div className="graph-evidence"><strong>Why this edge exists</strong><p>{currentSelectedEdge.whyConnected}</p><strong>Fixture provenance</strong><p>{currentSelectedEdge.provenance}</p><small>These are supplied prototype strings, not verified provenance.</small></div>
-            </> : <div className="graph-detail-empty"><Focus size={18} /><p>Select a node or relationship to inspect its fixture details.</p></div>}
+              <p className="graph-relation-name">{currentSelectedEdge.relationType}</p><div className="graph-evidence"><strong>Why this edge exists</strong><p>{currentSelectedEdge.whyConnected}</p><strong>Stored provenance</strong><p>{currentSelectedEdge.provenance}</p></div>
+            </> : <div className="graph-detail-empty"><Focus size={18} /><p>Select a persisted node or relationship to inspect its source.</p></div>}
           </aside>
         </div>}
   </section>;

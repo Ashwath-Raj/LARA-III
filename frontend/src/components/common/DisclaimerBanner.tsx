@@ -19,9 +19,9 @@ export const DisclaimerBanner: React.FC = () => {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <ShieldAlert size={14} color="#0075A2" />
-        <span style={{ fontWeight: 650, color: '#FFFFFF' }}>LOCAL PROTOTYPE:</span>
+        <span style={{ fontWeight: 650, color: '#FFFFFF' }}>LOCAL APPLICATION:</span>
         <span style={{ color: '#BDC2BF' }}>
-          Browser-stored demo data only. No backend, provider, OS notification, or external action is connected.
+          Tasks, reminders, conversations, projects, calendar events, and AI Loops use the paired local backend. Conversation memory uses local indexing when its services are ready.
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -34,7 +34,7 @@ export const DisclaimerBanner: React.FC = () => {
           }}
         >
           <Info size={12} />
-          Actions are simulated
+          Local-only inference
         </span>
       </div>
     </div>

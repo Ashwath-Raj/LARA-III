@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Cpu, Shield, Bell, CalendarDays, CheckCircle2, Server, Moon } from 'lucide-react';
 
 import { useAgent } from '../context/AgentContext';
 import { UNAVAILABLE_GOOGLE_CALENDAR } from '../api/types';
+import { LocalUbuntuAgentApi } from '../api/localAdapter';
 
 export const SettingsScreen: React.FC = () => {
   const { settings, updateSettings, resetDemoData } = useAgent();
@@ -19,6 +20,8 @@ export const SettingsScreen: React.FC = () => {
   const [desktopNotifs, setDesktopNotifs] = useState(settings.desktopNotifications ?? true);
   const [savedNotice, setSavedNotice] = useState(false);
   const [resetNotice, setResetNotice] = useState(false);
+  const [runtime, setRuntime] = useState<any>(null);
+  useEffect(() => { new LocalUbuntuAgentApi().readiness().then(setRuntime).catch(() => setRuntime({ status:'unavailable', database:'unavailable', local_model:{status:'unavailable'} })); }, []);
 
   const handleSave = async () => {
     await updateSettings({
@@ -41,6 +44,7 @@ export const SettingsScreen: React.FC = () => {
 
   return (
     <div className="settings-workspace" style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '860px' }}>
+      <p role="note">Settings persistence is not available yet. Values on this screen are for reference and will not be saved.</p>
       {resetNotice && <div role="status" aria-live="polite" style={{ padding: '12px 16px', color: 'var(--status-success)', background: 'var(--status-success-bg)', borderRadius: 'var(--radius-sm)', fontSize: '13px' }}>Demo data was reset to the local sample records.</div>}
       {savedNotice && (
         <div
@@ -62,13 +66,13 @@ export const SettingsScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Section 1: Simulated Model Providers */}
+      {/* Provider settings remain read-only until the backend exposes settings persistence. */}
       <div className="u-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Server size={18} color="var(--accent)" />
             <h2 style={{ fontSize: '15.5px', fontWeight: 700, color: 'var(--onyx)' }}>
-              Provider availability (browser demo)
+              Provider configuration (read-only)
             </h2>
           </div>
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
@@ -101,14 +105,14 @@ export const SettingsScreen: React.FC = () => {
                   fontFamily: 'var(--font-mono)',
                 }}
               >
-                NOT CONNECTED
+                {String(runtime?.local_model?.status || 'checking').replaceAll('_',' ').toUpperCase()}
               </span>
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              Preferred model: <code>gemma:2b-instruct-q4_K_M</code>
+              Configured model: <code>{runtime?.local_model?.model || 'Ollama default'}</code>
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              This is a saved preference only. No inference provider is connected.
+              Chat and AI Loops use this local provider when it reports available.
             </div>
           </div>
 
@@ -143,7 +147,7 @@ export const SettingsScreen: React.FC = () => {
               Hosted provider
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              No hosted provider or credentials are configured in this browser demo.
+              Hosted inference is disabled by the local-only provider policy.
             </div>
           </div>
         </div>
@@ -375,11 +379,13 @@ export const SettingsScreen: React.FC = () => {
             }
           }}
           className="u-btn u-btn-danger"
+          disabled
+          title="Demo reset is disabled for the persistent backend"
           style={{ padding: '8px 16px', fontSize: '12px' }}
         >
           Reset demo data
         </button>
-        <button onClick={handleSave} className="u-btn u-btn-primary" style={{ padding: '8px 24px', fontSize: '13.5px' }}>
+        <button onClick={handleSave} disabled title="Settings persistence is not implemented" className="u-btn u-btn-primary" style={{ padding: '8px 24px', fontSize: '13.5px' }}>
           Save System Preferences
         </button>
       </div>

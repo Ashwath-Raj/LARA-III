@@ -13,7 +13,7 @@ export interface GraphRelation extends Omit<KnowledgeGraphEdge, 'sourceNodeId' |
 export interface GraphViewData {
   nodes: GraphRecord[];
   links: GraphRelation[];
-  source: 'prototype';
+  source: 'persisted';
 }
 
 const nodeColors: Record<KnowledgeGraphNode['nodeType'], string> = {
@@ -40,8 +40,8 @@ const safeMetadata = (metadata: Record<string, unknown>) => Object.fromEntries(
     && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')),
 );
 
-/** Adapts only explicitly supplied mock graph rows; it never infers edges or claims authorization. */
-export function adaptPrototypeGraph(data: GraphData): GraphViewData {
+/** Adapts only rows explicitly returned by the authorized local graph API. */
+export function adaptPersistedGraph(data: GraphData): GraphViewData {
   const nodes: GraphRecord[] = data.nodes.slice(0, 150).map((node) => ({
     ...node,
     sourceRef: node.sourceRef.startsWith('/') ? node.sourceRef.split('/').at(-1) || 'local source' : node.sourceRef,
@@ -52,5 +52,5 @@ export function adaptPrototypeGraph(data: GraphData): GraphViewData {
   const links: GraphRelation[] = data.edges.slice(0, 400)
     .filter((edge) => ids.has(edge.sourceNodeId) && ids.has(edge.targetNodeId))
     .map(({ sourceNodeId, targetNodeId, ...edge }) => ({ ...edge, source: sourceNodeId, target: targetNodeId }));
-  return { nodes, links, source: 'prototype' };
+  return { nodes, links, source: 'persisted' };
 }

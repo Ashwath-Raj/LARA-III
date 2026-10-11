@@ -118,7 +118,7 @@ export const NotificationPopover: React.FC = () => {
             {!seenIds.includes(item.id) && <span className="notification-unread" aria-label="Unread" />}
           </button>
         </li>)}</ul>}
-      <p className="notification-local-note">Browser-local records only. No system or push notifications are sent.</p>
+      <p className="notification-local-note">These entries reflect scheduled local reminders. This screen does not confirm delivery or send push notifications.</p>
     </section>}
   </div>;
 };

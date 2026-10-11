@@ -285,7 +285,7 @@ export const KanbanWorkspace: React.FC = () => {
   };
 
   const handleQuickAdd = (status: TaskStatus) => {
-    const title = prompt(`Add a local prototype task to "${status.replace(/_/g, ' ')}":`);
+    const title = prompt(`Add a task to "${status.replace(/_/g, ' ')}":`);
     if (title && title.trim()) {
       createTask({
         title: title.trim(),

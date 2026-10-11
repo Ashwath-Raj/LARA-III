@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, ChevronDown, Clock3, FileSearch, ListPlus, LockKeyhole, MessageSquarePlus, Search, X, Wrench } from 'lucide-react';
 import { useAgent } from '../context/AgentContext';
-import { INITIAL_ROOMS } from '../data/mockData';
 import { ConversationMessage } from '../types';
 import { AgentNetworkBackground } from '../components/AgentNetworkBackground';
 import { NotificationPopover } from '../components/layout/NotificationPopover';
+import { LocalUbuntuAgentApi } from '../api/localAdapter';
 
 type WaveState = 'idle' | 'focused' | 'processing' | 'ready' | 'error';
 const suggestions = [
@@ -13,18 +13,18 @@ const suggestions = [
   { label: 'Search my local notes', prompt: 'Search my local notes for ' },
 ];
 const operations = [
-  { icon: <ListPlus size={16} />, name: 'Task capture', detail: 'Create and edit browser demo tasks in the Inbox.', available: true },
-  { icon: <Search size={16} />, name: 'Local note search', detail: 'No note index is connected; prompt replies do not search notes.', available: false },
-  { icon: <FileSearch size={16} />, name: 'Task and room context', detail: 'View the demo task list and the selected room context.', available: true },
-  { icon: <Wrench size={16} />, name: 'Providers and external tools', detail: 'No inference provider, backend, or external tool is connected.', available: false },
+  { icon: <ListPlus size={16} />, name: 'Task capture', detail: 'Create saved tasks in the Inbox or Kanban workspace.', available: true },
+  { icon: <Search size={16} />, name: 'Conversational memory', detail: 'Eligible exchanges are indexed locally and retrieved with SQLite provenance.', available: true },
+  { icon: <FileSearch size={16} />, name: 'Task and room context', detail: 'Chat uses bounded recent history and authorized relevant local memory.', available: true },
+  { icon: <Wrench size={16} />, name: 'Providers and external tools', detail: 'Chat uses the configured local Ollama model; tool execution is unavailable.', available: true },
 ];
 
 function suggestedOperation(text: string) {
   const query = text.toLocaleLowerCase();
-  if (/plan|today|schedule/.test(query)) return 'Task and schedule review (simulated)';
+  if (/plan|today|schedule/.test(query)) return 'Local model response · no task records are added automatically';
   if (/search|find|look up|notes/.test(query)) return 'Local note search (unavailable; no notes searched)';
-  if (/capture|add|task|remind/.test(query)) return 'Task capture (preview only; not performed)';
-  return 'General browser simulation (no tool selected)';
+  if (/capture|add|task|remind/.test(query)) return 'Local model response · use task capture to save changes';
+  return 'Local model response · no tools will run';
 }
 
 function makeWavePath(index: number, state: WaveState, time: number, pointer: { x: number; y: number }, hover: number) {
@@ -111,24 +111,33 @@ function Waveform({ state, compact = false }: { state: WaveState; compact?: bool
   </div>;
 }
 
-function MessageText({ message }: { message: ConversationMessage }) {
+function MessageText({ message, onRetryMemory, onExcludeMemory, retrying }: { message: ConversationMessage; onRetryMemory?: (id:string) => void; onExcludeMemory?: (id:string) => void; retrying?: boolean }) {
   return <article className={`chat-message ${message.sender === 'user' ? 'chat-user' : 'chat-agent'}`}>
     <div className="chat-message-meta"><strong>{message.sender === 'user' ? 'You' : 'LARA IV'}</strong>
       {message.sender === 'agent' && message.simulated && <span>SIMULATED</span>}
       <time dateTime={message.timestamp}>{new Date(message.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
     </div>
     <p>{message.content}</p>
+    {message.sender === 'agent' && message.memoryStatus && <small className="chat-memory-status">Memory: {message.memoryStatus.replaceAll('_', ' ')}{message.retrievedMemories?.length ? ` · ${message.retrievedMemories.length} source${message.retrievedMemories.length === 1 ? '' : 's'} retrieved` : ''}</small>}
+    {message.sender === 'agent' && message.memoryStatus === 'failed' && onRetryMemory && <button type="button" disabled={retrying} onClick={() => onRetryMemory(message.id)}>{retrying ? 'Retrying memory indexing…' : 'Retry local memory indexing'}</button>}
+    {message.sender === 'user' && message.memoryStatus === 'indexed' && onExcludeMemory && <button type="button" onClick={() => onExcludeMemory(message.id)}>Exclude from long-term memory</button>}
+    {message.sender === 'user' && message.memoryStatus === 'excluded' && <small>Excluded from long-term memory</small>}
+    {message.sender === 'agent' && message.retrievedMemories?.length ? <details><summary>View memory provenance</summary><ul>{message.retrievedMemories.map((source) => <li key={`${source.document_id}-${source.version}-${source.chunk_id}`}>
+      {source.title || 'Local source'}{source.conversation_id ? ` · conversation ${source.conversation_id.slice(0,8)}` : ' · authorized local document'}
+    </li>)}</ul></details> : null}
   </article>;
 }
 
 export const AgentWorkbench: React.FC = () => {
-  const { messages, conversations, activeConversationId, sendMessage, createConversation, selectConversation, activeRoom, activePersona, setActiveScreen, openRunPreview } = useAgent();
+  const { messages, conversations, activeConversationId, sendMessage, createConversation, selectConversation, renameConversation, deleteConversation,
+    setConversationMemory, excludeConversationMemory, activeRoom, setActiveScreen, openRunPreview } = useAgent();
   const [input, setInput] = useState('');
   const [focused, setFocused] = useState(false);
   const [sending, setSending] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [waveReady, setWaveReady] = useState(false);
   const [error, setError] = useState('');
+  const [memoryRetryId, setMemoryRetryId] = useState('');
   const [toolsOpen, setToolsOpen] = useState(false);
   const [operationOpen, setOperationOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -137,11 +146,33 @@ export const AgentWorkbench: React.FC = () => {
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const historyDialogRef = useRef<HTMLElement>(null);
   const readyTimerRef = useRef<number | null>(null);
-  const room = INITIAL_ROOMS.find((item) => item.id === activeRoom);
   const active = messages.length > 0;
   const state: WaveState = error ? 'error' : sending ? 'processing' : waveReady ? 'ready' : focused || input.trim() ? 'focused' : 'idle';
 
   useEffect(() => () => { if (readyTimerRef.current !== null) window.clearTimeout(readyTimerRef.current); }, []);
+
+  const retryMemory = async (messageId: string) => {
+    if (!activeConversationId || memoryRetryId) return;
+    setMemoryRetryId(messageId);
+    try { await new LocalUbuntuAgentApi().retryConversationMemory(activeConversationId,messageId); await selectConversation(activeConversationId); }
+    catch { setError('Local memory indexing is still unavailable. The conversation remains saved.'); }
+    finally { setMemoryRetryId(''); }
+  };
+  const excludeMemory = async (messageId: string) => {
+    if (!activeConversationId) return;
+    try { await excludeConversationMemory(activeConversationId,messageId); }
+    catch { setError('That exchange could not be removed from long-term memory.'); }
+  };
+  const activeConversation = conversations.find((item) => item.id === activeConversationId);
+  const renameSaved = async (id:string, currentTitle:string) => {
+    const title = window.prompt('Rename conversation',currentTitle);
+    if (!title?.trim()) return;
+    try { await renameConversation(id,title.trim()); } catch { setError('Conversation could not be renamed.'); }
+  };
+  const deleteSaved = async (id:string,title:string) => {
+    if (!window.confirm(`Delete “${title}” and its saved conversation memory?`)) return;
+    try { await deleteConversation(id); } catch { setError('Conversation could not be deleted.'); }
+  };
 
   useEffect(() => {
     if (active) threadEndRef.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'end' });
@@ -174,17 +205,17 @@ export const AgentWorkbench: React.FC = () => {
     const content = input.trim();
     if (!content) { setError('Write a message before sending.'); return; }
     if (sending) return;
-    if (!activeConversationId) { setError('A browser conversation could not be opened. Check browser storage and try again.'); return; }
+    if (!activeConversationId) { setError('A local conversation could not be opened. Refresh the workspace and try again.'); return; }
     setSending(true); setError(''); setFeedback(''); setOperationOpen(false);
     try {
       await sendMessage(content, activeRoom, activeConversationId);
-      setFeedback('A simulated reply was saved in this browser. No model or tool ran.');
+      setFeedback('Local model response saved to this conversation.');
       setWaveReady(true);
       if (readyTimerRef.current !== null) window.clearTimeout(readyTimerRef.current);
       readyTimerRef.current = window.setTimeout(() => setWaveReady(false), 900);
       setInput('');
-    } catch {
-      setError('The browser could not save this exchange. Your text is still here; try again.');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Local inference failed. The user message remains saved; retry when Ollama is available.');
     } finally { setSending(false); }
   };
 
@@ -196,16 +227,20 @@ export const AgentWorkbench: React.FC = () => {
   };
   const openSavedConversation = async (id: string) => {
     try { await selectConversation(id); setError(''); setFeedback(''); setHistoryOpen(false); window.requestAnimationFrame(() => composerRef.current?.focus()); }
-    catch { setError('This conversation could not be opened. It remains in your browser history.'); }
+    catch { setError('This saved conversation could not be opened.'); }
   };
   const simulateOperation = suggestedOperation(input);
 
   return <section className={`ask-lara-page${active ? ' ask-active' : ''}`} aria-labelledby="ask-lara-title">
     <header className="ask-topline">
       <button className="ask-brand" onClick={() => setActiveScreen('workbench')} aria-label="LARA IV home"><span>LARA IV</span></button>
-      <div className="ask-context"><LockKeyhole className="context-lock" size={13} aria-hidden="true" /><span>{room?.name || 'Operations'} room</span><span className="context-divider" /><span>{activePersona.replaceAll('_', ' ')}</span></div>
+      <div className="ask-context"><LockKeyhole className="context-lock" size={13} aria-hidden="true" /><span>Operations · local SQLite</span><span className="context-divider" /><span>Ollama local</span></div>
       <div className="ask-actions">
         <NotificationPopover />
+        {activeConversation && <button className="quiet-action" aria-pressed={!!activeConversation.memoryEnabled}
+          onClick={() => void setConversationMemory(activeConversation.id,!activeConversation.memoryEnabled).catch(() => setError('Conversation memory setting could not be saved.'))}>
+          Memory {activeConversation.memoryEnabled ? 'On' : 'Off'}
+        </button>}
         {active && <button className="quiet-action" onClick={() => void startConversation()}><MessageSquarePlus size={15} />New chat</button>}
         <button ref={historyTriggerRef} className="quiet-action" onClick={() => setHistoryOpen(true)} aria-haspopup="dialog"><Clock3 size={15} />History</button>
       </div>
@@ -214,10 +249,10 @@ export const AgentWorkbench: React.FC = () => {
     {active ? <div className="chat-stage">
       <AgentNetworkBackground />
       <div className="chat-brand-strip"><Waveform state={state} compact />
-        <div><p className="ask-overline">BROWSER SIMULATION</p><h1 id="ask-lara-title">{conversations.find((item) => item.id === activeConversationId)?.title || 'New conversation'}</h1></div>
+        <div><p className="ask-overline">LOCAL MODEL CONVERSATION</p><h1 id="ask-lara-title">{conversations.find((item) => item.id === activeConversationId)?.title || 'New conversation'}</h1></div>
       </div>
       <div className="chat-transcript" role="log" aria-label="Conversation messages" aria-live="polite" aria-relevant="additions text">
-        <div className="chat-messages">{messages.map((message) => <MessageText key={message.id} message={message} />)}<div ref={threadEndRef} /></div>
+        <div className="chat-messages">{messages.map((message) => <MessageText key={message.id} message={message} onRetryMemory={retryMemory} onExcludeMemory={excludeMemory} retrying={memoryRetryId===message.id} />)}<div ref={threadEndRef} /></div>
       </div>
       <div className="chat-composer-dock">
         <form className={`lara-composer chat-composer${focused ? ' is-focused' : ''}`} onSubmit={(event) => void submit(event)} aria-busy={sending}>
@@ -229,9 +264,9 @@ export const AgentWorkbench: React.FC = () => {
             <button type="submit" className="send-button" aria-label="Send message" disabled={sending || !input.trim()}><ArrowUp size={18} /></button>
           </div>
         </form>
-        <div className="chat-status" aria-live="polite">{error && <span className="ask-feedback error" role="alert">{error}</span>}{feedback && <span>{feedback}</span>}{sending && <span>Saving this simulated exchange…</span>}</div>
+        <div className="chat-status" aria-live="polite">{error && <span className="ask-feedback error" role="alert">{error}</span>}{feedback && <span>{feedback}</span>}{sending && <span>Waiting for local model…</span>}</div>
         {input.trim() && <div className="operation-preview"><button onClick={() => setOperationOpen((value) => !value)} aria-expanded={operationOpen}><span>Prompt routing preview: <strong>{simulateOperation}</strong></span><ChevronDown size={14} /></button>
-          {operationOpen && <p>This is a local text preview only. Sending stores your prompt with a static reply; it does not call this operation.</p>}
+          {operationOpen && <p>This is a rough intent label only. The model receives your text; no task tool or note search runs automatically.</p>}
         </div>}
         {input.trim() && <button type="button" className="run-preview-action" onClick={() => openRunPreview(input)}>Preview this request in Run Console <span>No execution starts</span></button>}
       </div>
@@ -251,11 +286,11 @@ export const AgentWorkbench: React.FC = () => {
           <button type="submit" className="send-button" aria-label="Send message" disabled={sending || !input.trim()}><ArrowUp size={18} /></button>
         </div>
       </form>
-      <p className="simulation-note" role="note">Prototype mode. Replies are static browser simulations; no model or tool runs.</p>
+      <p className="simulation-note" role="note">Replies use the local Ollama model. Eligible exchanges are indexed locally when memory is enabled.</p>
       {error && <p className="ask-feedback error" role="alert">{error}</p>}
       {feedback && <p className="ask-feedback" role="status">{feedback}</p>}
       {input.trim() && <div className="operation-preview"><button onClick={() => setOperationOpen((value) => !value)} aria-expanded={operationOpen}><span>Prompt routing preview: <strong>{simulateOperation}</strong></span><ChevronDown size={14} /></button>
-        {operationOpen && <p>This is a local text preview only. Sending stores your prompt with a static reply; it does not call this operation.</p>}
+        {operationOpen && <p>This is a rough intent label only. The model receives your text; no task tool or note search runs automatically.</p>}
       </div>}
       {input.trim() && <button type="button" className="run-preview-action" onClick={() => openRunPreview(input)}>Preview this request in Run Console <span>No execution starts</span></button>}
       <div className="prompt-suggestions" aria-label="Suggested prompts">{suggestions.map((item) => <button key={item.label} onClick={() => sendPrompt(item.prompt)}>{item.label}<span aria-hidden="true">↗</span></button>)}</div>
@@ -266,11 +301,14 @@ export const AgentWorkbench: React.FC = () => {
 
     {historyOpen && <div className="history-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setHistoryOpen(false); }}>
       <section ref={historyDialogRef} className="history-dialog" role="dialog" aria-modal="true" aria-labelledby="history-title" tabIndex={-1}>
-        <header><div><p className="ask-overline">BROWSER SAVED</p><h2 id="history-title">Conversation history</h2></div><button aria-label="Close history" onClick={() => setHistoryOpen(false)}><X size={18} /></button></header>
-        {conversations.length ? <div className="history-list">{conversations.map((conversation) => <button key={conversation.id} className={conversation.id === activeConversationId ? 'history-item is-current' : 'history-item'} onClick={() => void openSavedConversation(conversation.id)}>
-          <strong>{conversation.title}</strong><span>{conversation.preview}</span><small>{new Date(conversation.updatedAt).toLocaleString()} · {conversation.messageCount} messages</small>
-        </button>)}</div> : <p className="history-empty">No saved conversations yet. Messages will appear here after you send a prompt.</p>}
-        <footer><span>Stored only in this browser</span><button className="quiet-action" onClick={() => void startConversation()}><MessageSquarePlus size={15} />New conversation</button></footer>
+        <header><div><p className="ask-overline">SAVED LOCALLY</p><h2 id="history-title">Conversation history</h2></div><button aria-label="Close history" onClick={() => setHistoryOpen(false)}><X size={18} /></button></header>
+        {conversations.length ? <div className="history-list">{conversations.map((conversation) => <div className="history-item-row" key={conversation.id}>
+          <button className={conversation.id === activeConversationId ? 'history-item is-current' : 'history-item'} onClick={() => void openSavedConversation(conversation.id)}>
+            <strong>{conversation.title}</strong><span>{conversation.preview}</span><small>{new Date(conversation.updatedAt).toLocaleString()} · {conversation.messageCount} messages</small>
+          </button><button type="button" aria-label={`Rename ${conversation.title}`} onClick={() => void renameSaved(conversation.id,conversation.title)}>Rename</button>
+          <button type="button" aria-label={`Delete ${conversation.title}`} onClick={() => void deleteSaved(conversation.id,conversation.title)}>Delete</button>
+        </div>)}</div> : <p className="history-empty">No saved conversations yet. Messages will appear here after you send a prompt.</p>}
+        <footer><span>Stored in the local SQLite database</span><button className="quiet-action" onClick={() => void startConversation()}><MessageSquarePlus size={15} />New conversation</button></footer>
       </section>
     </div>}
   </section>;

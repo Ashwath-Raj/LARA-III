@@ -29,8 +29,7 @@ export const TodayScreen: React.FC = () => {
   // Filter tasks due today or urgent
   const dueTodayTasks = tasks.filter(
     (t) =>
-      t.dueDate === '2026-10-10' ||
-      t.dueDate === '2026-10-11' ||
+      t.dueDate === new Date().toISOString().slice(0, 10) ||
       t.status === 'ready_to_submit'
   );
 
@@ -61,7 +60,7 @@ export const TodayScreen: React.FC = () => {
             {dueTodayTasks.length}
           </div>
           <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Includes 1 staged Classroom submission
+            Counted from saved task deadlines and workflow state
           </div>
         </div>
 
@@ -76,7 +75,7 @@ export const TodayScreen: React.FC = () => {
             {upcomingReminders.length}
           </div>
           <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Next alert: 20:00 (Classroom check)
+            {upcomingReminders.length ? `Next reminder: ${new Date(upcomingReminders.map((item) => item.snoozeUntil || item.remindAt).sort()[0]).toLocaleString()}` : 'No scheduled reminders'}
           </div>
         </div>
 
@@ -303,7 +302,7 @@ export const TodayScreen: React.FC = () => {
                   fontFamily: 'var(--font-mono)',
                 }}
               >
-                SIMULATED
+                LOCAL
               </span>
             </div>
 
@@ -314,7 +313,7 @@ export const TodayScreen: React.FC = () => {
                   Ollama Local Inference
                 </span>
                 <span style={{ fontWeight: 600, color: 'var(--status-success)', fontFamily: 'var(--font-mono)' }}>
-                  Gemma 2B · Simulated
+                  Model availability is shown in Settings
                 </span>
               </div>
 
@@ -324,7 +323,7 @@ export const TodayScreen: React.FC = () => {
                   SQLite State DB
                 </span>
                 <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
-                  Healthy (42 rows)
+                  Connected · persistent SQLite
                 </span>
               </div>
 

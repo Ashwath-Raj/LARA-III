@@ -2,12 +2,11 @@ import React from 'react';
 import {
   Shield,
   UserCheck,
-  ArrowRightLeft,
   Layers,
 } from 'lucide-react';
 
 import { useAgent } from '../context/AgentContext';
-import { INITIAL_ROOMS, INITIAL_PERSONAS, INITIAL_BRIDGES } from '../data/mockData';
+import { INITIAL_ROOMS, INITIAL_PERSONAS } from '../data/mockData';
 import { KnowledgeRoom, PersonaId } from '../types';
 import { SensitivityBadge } from '../components/common/Badge';
 
@@ -297,8 +296,7 @@ export const RoomsScreen: React.FC = () => {
                     paddingTop: '8px',
                   }}
                 >
-                  <span>{room.itemCount} linked entities</span>
-                  <span>{room.bridgesCount} cross-room bridges</span>
+                  <span>Policy metadata · no entity count API</span>
                 </div>
               </div>
             );
@@ -306,62 +304,10 @@ export const RoomsScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* Cross-Room Bridges Section */}
+      {/* Cross-room bridge data is deliberately not represented by sample records. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <ArrowRightLeft size={16} color="var(--accent)" />
-          <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--onyx)' }}>
-            Active Cross-Room Bridges ({INITIAL_BRIDGES.length})
-          </h2>
-        </div>
-        <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-          Bridges project explicit narrow fields across rooms (e.g. sharing assignment title without exposing lecture notes). They never open raw database access.
-        </p>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {INITIAL_BRIDGES.map((bridge) => (
-            <div
-              key={bridge.id}
-              className="u-card"
-              style={{
-                padding: '16px 20px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="u-code-tag">{bridge.sourceRoom}</span>
-                  <span>→</span>
-                  <span className="u-code-tag">{bridge.destinationRoom}</span>
-                </div>
-                <span
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--status-success)',
-                    fontWeight: 700,
-                  }}
-                >
-                  ACTIVE BRIDGE
-                </span>
-              </div>
-
-              <div style={{ fontSize: '12.5px', color: 'var(--text-primary)' }}>
-                {bridge.purpose}
-              </div>
-
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Shared Fields:</span>
-                {bridge.sharedFields.map((f) => (
-                  <span key={f} className="u-code-tag">
-                    {f}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+        <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--onyx)' }}>Cross-room bridges</h2>
+        <p role="status" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Bridge management is unavailable in this backend. No bridge records are displayed.</p>
       </div>
     </div>
   );

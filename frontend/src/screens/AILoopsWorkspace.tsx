@@ -3,7 +3,7 @@ import {
   AlertCircle, ArrowDownLeft, ArrowUpRight, ChevronDown, Circle, Clipboard,
   ExternalLink, FileDown, FileText, GitBranch, History, Plus, Search, ShieldCheck, X,
 } from 'lucide-react';
-import { adaptPrototypeGraph } from '../api/graphAdapter';
+import { adaptPersistedGraph } from '../api/graphAdapter';
 import { GraphCanvas, GraphErrorBoundary, supportsWebGL } from './KnowledgeGraphWorkspace';
 import { useAgent } from '../context/AgentContext';
 import {
@@ -110,8 +110,13 @@ function lifecycle(status: AILoopSession['status']): { category: string; label: 
 }
 
 function activityLabel(participant: AILoopParticipant): string {
-  if (participant.activityState === 'idle') return 'Idle';
-  return `${participant.activityState.replaceAll('_', ' ')} · simulated record`;
+  if (participant.isSimulated) return 'Simulated record';
+  if (participant.executionStatus === 'failed') return `Failed${participant.errorClass ? ` · ${participant.errorClass}` : ''}`;
+  if (participant.executionStatus === 'cancelled') return 'Cancelled';
+  if (participant.executionStatus === 'pending') return 'Not run';
+  if (participant.executionStatus === 'succeeded') return 'Completed';
+  if (participant.activityState === 'idle') return 'Execution recorded';
+  return participant.activityState.replaceAll('_', ' ');
 }
 
 function participantMessages(loop: AILoopSession, role: AILoopRole): AILoopMessage[] {
@@ -249,9 +254,9 @@ function LoopCreationForm({ onCancel }: { onCancel: () => void }) {
     <header><div><p className="loop-eyebrow">NEW SESSION</p><h2>Set up a loop</h2></div>
       <button type="button" className="loop-icon-button" aria-label="Close new loop form" onClick={onCancel}><X size={16} /></button></header>
     <label>Session name<input required maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Compare cache eviction strategies" /></label>
-    <label>Goal<textarea required maxLength={6000} rows={4} value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="State the outcome to evaluate. The mock UI will not run agents." /></label>
+    <label>Goal<textarea required maxLength={6000} rows={4} value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="State the outcome to evaluate with local reasoning roles." /></label>
     <label>Constraints <span>One per line, optional</span><textarea maxLength={6000} rows={3} value={constraints} onChange={(event) => setConstraints(event.target.value)} placeholder="Keep the data local&#10;Compare measured p95 latency" /></label>
-    <p className="loop-create-note">This creates a separate local mock session with empty debate, graph and desktop records. It does not start AI or desktop execution.</p>
+    <p className="loop-create-note">This saves a new session. Start model execution separately from its meeting room.</p>
     {error && <p className="loop-inline-error" role="alert"><AlertCircle size={14} />{error}</p>}
     <footer><button type="button" className="loop-button loop-button-quiet" onClick={onCancel}>Cancel</button><button type="submit" className="loop-button loop-button-primary" disabled={saving}>{saving ? 'Saving…' : 'Create loop'}</button></footer>
   </form>;
@@ -279,7 +284,7 @@ function MessageCard({ loop, message, selected, onSelect }: {
         <small>{reference.sourceType} · {safeReference(reference.provenance)}</small>
       </li>)}
     </ul>}
-    <small className="loop-simulation-stamp">{message.simulated ? 'Simulated contribution' : 'Recorded contribution'}</small>
+    <small className="loop-simulation-stamp">{message.simulated ? 'Simulated contribution' : 'Persisted model output'}</small>
   </article>;
 }
 
@@ -368,7 +373,7 @@ function ParticipantInspector({ loop, role, onShowMessage, artifacts }: {
       </li>)}</ul> : <p className="loop-empty-copy">No contribution is recorded in this session. The participant has not run.</p>}
     </div>
     <div className="loop-inspector-section"><h3>Linked claims and evidence</h3>
-      {graphNodes.length ? <ul className="loop-inspector-links">{graphNodes.map((node) => <li key={node.id}><strong>{redactSensitiveText(node.displayName)}</strong><small>Round {node.originatingRound} · {node.disposition || 'no disposition recorded'}</small></li>)}</ul> : <p className="loop-empty-copy">No linked graph claims are recorded.</p>}
+      {graphNodes.length ? <ul className="loop-inspector-links">{graphNodes.map((node) => <li key={node.id}><strong>{redactSensitiveText(node.displayName)}</strong><small>{node.originatingRound ? `Round ${node.originatingRound}` : 'Session record'} · {node.disposition || 'no disposition recorded'}</small></li>)}</ul> : <p className="loop-empty-copy">No linked graph claims are recorded.</p>}
       {linkedArtifacts.size > 0 && <ul className="loop-inspector-links">{[...linkedArtifacts.values()].map((artifact) => <li key={artifact.id}><strong>{artifact.name}</strong><small>{artifact.type} · {artifact.provenance}</small></li>)}</ul>}
     </div>
     {loop.status === 'Failed' && <p className="loop-inline-error"><AlertCircle size={14} />The session is marked failed; no additional work is implied.</p>}
@@ -418,7 +423,7 @@ function MeetingRoom({ loop, selectedRole, selectRole, selectedMessageId, showMe
       </section>
     </aside>
     <section className="loop-debate-column" aria-label="Debate timeline">
-      <header className="loop-debate-heading"><div><p className="loop-eyebrow">SIMULATED DEBATE</p><h2>Meeting room</h2><p>Recorded claims and evidence only. No live model calls are connected.</p></div>
+      <header className="loop-debate-heading"><div><p className="loop-eyebrow">PERSISTED MODEL INVOCATIONS</p><h2>Meeting room</h2><p>Only completed role invocations appear in the discussion.</p></div>
         <span className="loop-debate-count">{roleFilteredMessages.length} {roleFilteredMessages.length === 1 ? 'contribution' : 'contributions'}</span></header>
       {rounds.length ? <div className="loop-round-history">
         {rounds.map(([round, messages], index) => <details key={round} open={round === loop.currentRound || (rounds.length === 1 && index === 0)} className="loop-round">
@@ -479,7 +484,7 @@ function LoopGraph({ loop, onShowMessage }: { loop: AILoopSession; onShowMessage
   const visibleEdges = loop.graphEdges.filter((edge) => edge.loopId === loop.id
     && visibleIds.has(edge.sourceNodeId) && visibleIds.has(edge.targetNodeId)
     && (scope === 'shared' || edge.roleScope === 'shared' || edge.roleScope === scope));
-  const graph = useMemo(() => adaptPrototypeGraph({ nodes: visibleNodes, edges: visibleEdges }), [visibleNodes, visibleEdges]);
+  const graph = useMemo(() => adaptPersistedGraph({ nodes: visibleNodes, edges: visibleEdges }), [visibleNodes, visibleEdges]);
   const selected = selectedNode && scopedNodes.find((node) => node.id === selectedNode.id);
   const selectedRelation = selectedEdge && visibleEdges.find((edge) => edge.id === selectedEdge.id);
   const messageById = new Map(loop.messages.map((message) => [message.id, message]));
@@ -511,7 +516,7 @@ function LoopGraph({ loop, onShowMessage }: { loop: AILoopSession; onShowMessage
           <section className="graph-node-list loop-graph-record-list" aria-labelledby="loop-graph-records-title">
             <header><h2 id="loop-graph-records-title">Visible records</h2><span>Keyboard accessible</span></header>
             <ul>{visibleNodes.map((node) => <li key={node.id}><button className={selected?.id === node.id ? 'is-selected' : ''} onClick={() => { setSelectedNode(node); setSelectedEdge(null); }} aria-pressed={selected?.id === node.id}>
-              <span className="graph-node-dot" /><span className="graph-list-title">{redactSensitiveText(node.displayName)}</span><small>{node.nodeType.replaceAll('_', ' ')} · Round {node.originatingRound}</small>
+              <span className="graph-node-dot" /><span className="graph-list-title">{redactSensitiveText(node.displayName)}</span><small>{node.nodeType.replaceAll('_', ' ')} · {node.originatingRound ? `Round ${node.originatingRound}` : 'Session record'}</small>
             </button></li>)}</ul>
           </section>
           <section className="graph-node-list graph-edge-list" aria-labelledby="loop-graph-links-title">
@@ -523,13 +528,13 @@ function LoopGraph({ loop, onShowMessage }: { loop: AILoopSession; onShowMessage
         </div>
         <aside className="graph-detail-panel loop-graph-detail" aria-live="polite">
           {selected ? <>
-            <header><span className="graph-detail-type">{selected.nodeType.replaceAll('_', ' ')} · Round {selected.originatingRound}</span><button aria-label="Clear selected node" onClick={() => setSelectedNode(null)}><X size={16} /></button></header>
+            <header><span className="graph-detail-type">{selected.nodeType.replaceAll('_', ' ')} · {selected.originatingRound ? `Round ${selected.originatingRound}` : 'Session record'}</span><button aria-label="Clear selected node" onClick={() => setSelectedNode(null)}><X size={16} /></button></header>
             <h2>{redactSensitiveText(selected.displayName)}</h2>
             <p className="graph-detail-scope">{selected.roleScope === 'shared' ? 'Shared session record' : ROLE_LABEL[selected.roleScope]}</p>
             <dl><div><dt>Recorded claim or observation</dt><dd>{redactSensitiveText(selected.claimSummary)}</dd></div>
               <div><dt>Disposition</dt><dd>{selected.disposition || 'Not recorded'}</dd></div>
               <div><dt>Source provenance</dt><dd>{safeReference(selected.sourceRef)}</dd></div>
-              <div><dt>Confidence in record</dt><dd>{Number.isFinite(selected.confidence) ? `${Math.round(selected.confidence * 100)}%` : 'Not recorded'}</dd></div>
+              <div><dt>Confidence in record</dt><dd>{typeof selected.confidence === 'number' && Number.isFinite(selected.confidence) ? `${Math.round(selected.confidence * 100)}%` : 'Not recorded'}</dd></div>
             </dl>
             <section className="graph-relations"><h3><ArrowDownLeft size={13} />Related messages</h3>
               {selected.relatedMessageIds.length ? selected.relatedMessageIds.map((id) => {
@@ -558,7 +563,7 @@ function SynthesisView({ loop, onCopy, onExport }: { loop: AILoopSession; onCopy
   const synthesis = loop.synthesis;
   if (!synthesis) return <div className="loop-empty-state">
     <FileText size={20} /><h3>No final synthesis recorded</h3>
-    <p>{loop.status === 'Failed' ? 'The failed session has no synthesis record.' : loop.status === 'Cancelled' ? 'The cancelled session has no synthesis record.' : 'A conclusion will appear only when a synthesis record exists. This mock UI does not generate one.'}</p>
+    <p>{loop.status === 'Failed' ? 'The failed session has no synthesis record.' : loop.status === 'Cancelled' ? 'The cancelled session has no synthesis record.' : 'A conclusion appears here after the Judge records a synthesis.'}</p>
   </div>;
   return <section className="loop-synthesis-view" aria-labelledby="loop-synthesis-title">
     <header className="loop-subview-heading"><div><p className="loop-eyebrow">RECORDED CONCLUSION</p><h2 id="loop-synthesis-title">Final synthesis</h2><p>This is the stored session result, not proof that a recommendation was executed.</p></div>
@@ -566,6 +571,8 @@ function SynthesisView({ loop, onCopy, onExport }: { loop: AILoopSession; onCopy
     </header>
     {loop.isSimulated && <p className="loop-synthesis-simulation">Simulated synthesis record · no agent execution or action completion is claimed.</p>}
     <article className="loop-conclusion-panel"><h3>Consolidated conclusion</h3><p>{redactSensitiveText(synthesis.consolidatedConclusion)}</p></article>
+    {synthesis.reviewVerdict && <article className="loop-conclusion-panel role-reviewer"><h3>Unbiased Reviewer verdict · {synthesis.reviewVerdict.replaceAll('_',' ')}</h3>
+      {synthesis.reviewerSummary?.length ? <ul>{synthesis.reviewerSummary.map((reason,index)=><li key={`${index}-${reason}`}>{redactSensitiveText(reason)}</li>)}</ul> : <p>No reviewer reasons were recorded.</p>}</article>}
     <div className="loop-synthesis-grid">
       <section className="loop-synthesis-section"><h3>Accepted recommendations</h3>{synthesis.acceptedRecommendations.length
         ? <ol>{synthesis.acceptedRecommendations.map((recommendation) => <li key={recommendation.id}><strong>{redactSensitiveText(recommendation.summary)}</strong><p>{redactSensitiveText(recommendation.supportingEvidence)}</p></li>)}</ol>
@@ -609,7 +616,7 @@ function PromptAndArtifactView({ loop }: { loop: AILoopSession }) {
 export const AILoopsWorkspace: React.FC = () => {
   const {
     loops, activeLoopId, selectedLoopParticipantRole, setSelectedLoopParticipantRole,
-    loopsLoadError, loading, refreshAll, newLoopRequested, clearNewLoopRequest,
+    loopsLoadError, loading, refreshAll, newLoopRequested, clearNewLoopRequest, runLoop, cancelLoop,
   } = useAgent();
   const loop = loops.find((session) => session.id === activeLoopId) || loops[0] || null;
   const [loopView, setLoopView] = useState<LoopViewState>(() => ({
@@ -636,6 +643,7 @@ export const AILoopsWorkspace: React.FC = () => {
   };
   const [feedback, setFeedback] = useState('');
   const [copyError, setCopyError] = useState('');
+  const [running, setRunning] = useState(false);
   const selectedRole = selectedLoopParticipantRole || 'blue_team';
 
   useEffect(() => {
@@ -675,14 +683,26 @@ export const AILoopsWorkspace: React.FC = () => {
       setCopyError(error instanceof Error ? error.message : 'The final prompt could not be copied.');
     }
   };
+  const executeLoop = async () => {
+    if (!loop) return;
+    setRunning(true); setCopyError('');
+    try { const result = await runLoop(loop.id); setFeedback(`Execution finished with status: ${result.status}.`); }
+    catch (error) { setCopyError(error instanceof Error ? error.message : 'Loop execution failed.'); }
+    finally { setRunning(false); }
+  };
+  const stopLoop = async () => {
+    if (!loop) return;
+    try { const result = await cancelLoop(loop.id); setFeedback(`Cancellation state: ${result.status}.`); }
+    catch (error) { setCopyError(error instanceof Error ? error.message : 'Cancellation failed.'); }
+  };
 
   if (loading && !loops.length) return <div className="ai-loops-workspace"><div className="loop-loading" role="status"><span className="loop-loading-bar" /><span className="loop-loading-bar" /><span className="loop-loading-bar" />Loading saved AI Loop sessions…</div></div>;
 
   return <section className="ai-loops-workspace" aria-labelledby="ai-loops-title">
-    <header className="ai-loops-header"><div><p className="loop-eyebrow">LARA IV · LOCAL MOCK WORKSPACE</p><h1 id="ai-loops-title">AI Loops</h1><p>Inspect recorded debate sessions, evidence and decisions.</p></div>
-      <button className="loop-button loop-button-primary" onClick={() => { updateLoopView({ showCreateForm: !showCreateForm }); setFeedback(''); }}><Plus size={15} />New Loop</button>
+    <header className="ai-loops-header"><div><p className="loop-eyebrow">LARA IV · LOCAL AI LOOP</p><h1 id="ai-loops-title">AI Loops</h1><p>Inspect persistent local debate sessions and model invocations.</p></div>
+      <div>{loop && <>{loop.status === 'Debating' && <button className="loop-button loop-button-quiet" onClick={() => void stopLoop()}>Cancel</button>}<button className="loop-button loop-button-primary" disabled={running || ['Synthesized','Cancelled','Failed','Awaiting User'].includes(loop.status)} onClick={() => void executeLoop()}>{running ? 'Running roles…' : 'Run Loop'}</button></>} <button className="loop-button loop-button-primary" onClick={() => { updateLoopView({ showCreateForm: !showCreateForm }); setFeedback(''); }}><Plus size={15} />New Loop</button></div>
     </header>
-    <div className="loop-honesty-banner"><AlertCircle size={15} /><p><strong>Simulated session data.</strong> The frontend has no live multi-model, persistence backend or desktop-control connection. Existing fixtures and browser-saved sessions are labeled accordingly.</p></div>
+    <div className="loop-honesty-banner"><AlertCircle size={15} /><p><strong>Local execution.</strong> Each role appears only after its model invocation is persisted. A failed or review-required run remains visible as such.</p></div>
     {loopsLoadError && <div className="loop-load-error" role="alert"><AlertCircle size={16} /><p>{loopsLoadError}</p><button className="loop-button loop-button-quiet" onClick={() => void refreshAll()}>Retry loading</button></div>}
     {(showCreateForm || newLoopRequested) && <LoopCreationForm onCancel={closeCreateForm} />}
     {feedback && <p className="loop-action-feedback" role="status">{feedback}</p>}
@@ -690,7 +710,7 @@ export const AILoopsWorkspace: React.FC = () => {
       <AlertCircle size={22} /><h2>Sessions unavailable</h2><p>Saved sessions could not be loaded. Retry before treating the session list as empty.</p>
       <button className="loop-button loop-button-quiet" onClick={() => void refreshAll()}>Retry loading</button>
     </div> : !loop ? <div className="loop-empty-state loop-first-session">
-      <GitBranch size={22} /><h2>No AI Loop sessions</h2><p>Create a separate mock session to record a goal, constraints and role configuration. No agents will run.</p>
+      <GitBranch size={22} /><h2>No AI Loop sessions</h2><p>Create a persistent session, then run the four local reasoning roles.</p>
       {!showCreateForm && !newLoopRequested && <button className="loop-button loop-button-primary" onClick={() => updateLoopView({ showCreateForm: true })}><Plus size={15} />Create first loop</button>}
     </div> : <>
       <nav className="loop-workspace-tabs" aria-label="Loop views">

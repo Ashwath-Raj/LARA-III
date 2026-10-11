@@ -139,15 +139,15 @@ export const RunConsoleScreen: React.FC = () => {
     {runConsolePreviewGoal && !selectedJob && <section className="run-preview-card" aria-labelledby="run-preview-title">
       <div className="run-panel-heading"><div><Play size={16} /><h2 id="run-preview-title">Proposed run preview</h2></div><span className="run-status-pill status-neutral">Preview only</span></div>
       <p className="run-preview-goal">{runConsolePreviewGoal}</p>
-      <div className="run-boundary-banner" role="note"><CircleAlert size={17} /><p><strong>No run has started.</strong> This browser demo has no connected model provider or job service. Your prompt is shown here for review only.</p></div>
+    <div className="run-boundary-banner" role="note"><CircleAlert size={17} /><p><strong>No run has started.</strong> Job creation and execution are unavailable in the local API. Your prompt is shown for review only.</p></div>
       <dl className="run-meta-grid"><div><dt>Provider</dt><dd>Not configured</dd></div><div><dt>Execution</dt><dd>Unavailable</dd></div><div><dt>Approval policy</dt><dd>Not evaluated by a backend</dd></div></dl>
       <p className="run-local-note">To execute this request, configure a trusted job service, provider, policy checks, and a durable event stream.</p>
       <button className="run-back-button" type="button" onClick={() => { clearRunPreview(); setActiveScreen('workbench'); }}><ArrowLeft size={15} />Return to conversation</button>
     </section>}
     {selectedJob ? <JobDetail job={selectedJob} approval={jobApproval} onReviewApproval={reviewApproval} relatedTasks={relatedTasks} onBack={returnToConversation} onOpenTask={openTask} onOpenTaskList={openTaskList} />
       : <section className="run-records-section" aria-labelledby="run-records-title">
-        <div className="run-records-header"><div><h2 id="run-records-title">Sample run records</h2><p>Browser-local fixtures; they do not represent live activity.</p></div><span>{jobs.length} records</span></div>
-        {jobs.length === 0 ? <p className="run-empty-inline">No sample run records are available.</p>
+        <div className="run-records-header"><div><h2 id="run-records-title">Run records</h2><p>Persistent job records are not exposed by this API.</p></div><span>{jobs.length} records</span></div>
+        {jobs.length === 0 ? <p className="run-empty-inline">No backend job records are available.</p>
           : <ul className="run-record-list">{jobs.map((job) => <li key={job.id}><button type="button" className="run-record-card" onClick={() => { clearRunPreview(); setSelectedJob(job); }}>
             <div className="run-record-card-top"><span className={`run-status-pill status-${job.status === 'completed' ? 'ok' : ['failed', 'blocked'].includes(job.status) ? 'warn' : 'neutral'}`}>{statusLabel(job.status)}</span><time dateTime={job.startedAt}>{new Date(job.startedAt).toLocaleDateString()}</time></div>
             <strong>{job.goal}</strong><span>{job.toolTraces.length} recorded steps · sample only</span>

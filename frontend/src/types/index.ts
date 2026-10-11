@@ -302,7 +302,7 @@ export interface KnowledgeGraphNode {
   roomId: KnowledgeRoom;
   sensitivityLabel: RoomSensitivity;
   sourceRef: string;
-  confidence: number;
+  confidence?: number;
   lastUpdated: string;
   metadata: Record<string, unknown>;
   x?: number;
@@ -332,6 +332,8 @@ export interface ConversationMessage {
   jobId?: string;
   attachments?: string[];
   sources?: Array<{ title: string; url?: string; excerpt: string }>;
+  memoryStatus?: 'indexed' | 'excluded' | 'failed' | 'pending' | 'disabled' | 'not_indexed';
+  retrievedMemories?: Array<{ title?: string; conversation_id?: string | null; message_id?: string | null; document_id?: string; chunk_id?: string; version?: number }>;
 }
 
 export interface ConversationSummary {
@@ -340,6 +342,7 @@ export interface ConversationSummary {
   updatedAt: string;
   preview: string;
   messageCount: number;
+  memoryEnabled?: boolean;
 }
 
 // AI Loop Domain Models
@@ -368,6 +371,8 @@ export interface AILoopParticipant {
   activityState: 'idle' | 'thinking' | 'proposing' | 'critiquing' | 'reviewing' | 'deciding';
   latestContributionTime?: string;
   latestPreview?: string;
+  executionStatus?: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  errorClass?: string;
 }
 
 export interface AILoopMessage {
@@ -436,7 +441,7 @@ export interface AILoopGraphNode extends KnowledgeGraphNode {
   loopId: string;
   roleScope: AILoopRole | 'shared';
   claimSummary: string;
-  originatingRound: number;
+  originatingRound?: number;
   relatedMessageIds: string[];
   linkedSourceIds: string[];
   disposition?: 'accepted' | 'challenged' | 'refuted' | 'resolved' | 'open';
@@ -449,6 +454,8 @@ export interface AILoopGraphEdge extends KnowledgeGraphEdge {
 
 export interface AILoopSynthesis {
   consolidatedConclusion: string;
+  reviewVerdict?: 'pass' | 'revise' | 'insufficient_evidence';
+  reviewerSummary?: string[];
   acceptedRecommendations: Array<{
     id: string;
     summary: string;

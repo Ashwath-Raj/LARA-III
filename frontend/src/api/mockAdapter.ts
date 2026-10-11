@@ -27,7 +27,7 @@ import {
   CreateJobPayload,
 } from './types';
 
-import { UbuntuAgentApiAdapter, GraphData } from './adapter';
+import { UbuntuAgentApiAdapter, GraphData, CalendarEventRecord } from './adapter';
 import {
   INITIAL_TASKS,
   INITIAL_REMINDERS,
@@ -208,6 +208,9 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
   private auditEvents: AuditEvent[];
   private settings: SettingsState;
   private projects: Project[];
+  private calendarEvents: CalendarEventRecord[] = [];
+  private conversationTitles: Record<string,string> = {};
+  private conversationMemory: Record<string,boolean> = {};
   private messages: ConversationMessage[];
   private activeConversationId: string;
   private loops: AILoopSession[];
@@ -519,6 +522,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
     const updated: Task = {
       ...this.tasks[index],
       ...patch,
+      project: patch.project === null ? undefined : patch.project ?? this.tasks[index].project,
       updatedAt: new Date().toISOString(),
     };
 
@@ -729,9 +733,27 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
     return newReminder;
   }
 
+  async listCalendarEvents(): Promise<CalendarEventRecord[]> { return [...this.calendarEvents]; }
+  async createCalendarEvent(event: Omit<CalendarEventRecord,'id'|'status'>): Promise<CalendarEventRecord> {
+    const created: CalendarEventRecord = { ...event, id: uniqueLocalId('event'), status: 'scheduled' };
+    this.calendarEvents = [...this.calendarEvents, created]; return created;
+  }
+  async cancelCalendarEvent(id:string):Promise<CalendarEventRecord>{const item=this.calendarEvents.find((event)=>event.id===id);if(!item)throw new Error('Calendar event not found.');item.status='cancelled';return item;}
+
   // Project Operations
   async listProjects(): Promise<Project[]> {
     return [...this.projects];
+  }
+
+  async createProject(name: string, roomId: any = 'operations'): Promise<Project> {
+    const now = new Date().toISOString();
+    const created: Project = { id:uniqueLocalId('project'),name,description:'',roomId,status:'active',milestones:[],taskIds:[],fileAttachments:[],dependencies:[],createdAt:now,updatedAt:now };
+    this.projects = [created, ...this.projects]; this.saveToStorage(STORAGE_KEYS.PROJECTS, this.projects); return created;
+  }
+
+  async deleteProject(projectId: string): Promise<void> {
+    this.projects = this.projects.filter((project) => project.id !== projectId);
+    this.saveToStorage(STORAGE_KEYS.PROJECTS, this.projects);
   }
 
   async getProject(projectId: string): Promise<Project | null> {
@@ -886,7 +908,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
       const latest = messages.at(-1)!;
       return {
         id,
-        title: firstUser?.content.trim().slice(0, 56) || 'Conversation',
+        title: this.conversationTitles[id] || firstUser?.content.trim().slice(0, 56) || 'Conversation',
         updatedAt: latest.timestamp,
         preview: latest.content.replace(/\s+/g, ' ').slice(0, 100),
         messageCount: messages.length,
@@ -912,6 +934,22 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
       this.activeConversationId = previous;
       throw new Error('Conversation storage is unavailable.');
     }
+  }
+
+  async renameConversation(conversationId: string, title: string): Promise<void> {
+    if (!this.messages.some((message) => message.conversationId === conversationId)) throw new Error('Conversation was not found.');
+    this.conversationTitles[conversationId] = title;
+  }
+  async deleteConversation(conversationId: string): Promise<void> {
+    this.messages = this.messages.filter((message) => message.conversationId !== conversationId);
+    this.saveToStorage(STORAGE_KEYS.MESSAGES, this.messages);
+    if (this.activeConversationId === conversationId) await this.createConversation();
+  }
+  async setConversationMemory(conversationId: string, enabled: boolean): Promise<void> { this.conversationMemory[conversationId] = enabled; }
+  async excludeConversationMemory(conversationId: string, messageId: string): Promise<void> {
+    this.messages = this.messages.map((message) => message.conversationId === conversationId && message.id === messageId
+      ? { ...message, memoryStatus: 'excluded' } : message);
+    this.saveToStorage(STORAGE_KEYS.MESSAGES, this.messages);
   }
 
   async sendMessage(content: string, roomId = 'operations', conversationId = this.activeConversationId): Promise<ConversationMessage> {

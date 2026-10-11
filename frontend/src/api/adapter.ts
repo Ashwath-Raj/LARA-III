@@ -17,6 +17,7 @@ import {
   ConversationMessage,
   ConversationSummary,
   AILoopSession,
+  KnowledgeRoom,
 } from '../types';
 
 import {
@@ -33,6 +34,11 @@ import {
 export interface GraphData {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
+}
+
+export interface CalendarEventRecord {
+  id: string; title: string; description: string; room_id: string; starts_at: string;
+  ends_at?: string | null; timezone: string; status: 'scheduled' | 'cancelled';
 }
 
 export interface UbuntuAgentApiAdapter {
@@ -52,9 +58,14 @@ export interface UbuntuAgentApiAdapter {
   dismissReminder(reminderId: string): Promise<Reminder>;
   cancelReminder(reminderId: string): Promise<Reminder>;
   createReminder(taskId: string, title: string, remindAt: string): Promise<Reminder>;
+  listCalendarEvents(): Promise<CalendarEventRecord[]>;
+  createCalendarEvent(event: Omit<CalendarEventRecord, 'id' | 'status'>): Promise<CalendarEventRecord>;
+  cancelCalendarEvent(eventId: string): Promise<CalendarEventRecord>;
 
   // Project operations
   listProjects(): Promise<Project[]>;
+  createProject(name: string, roomId?: KnowledgeRoom): Promise<Project>;
+  deleteProject(projectId: string): Promise<void>;
   getProject(projectId: string): Promise<Project | null>;
   updateProject(projectId: string, patch: Partial<Project>): Promise<Project>;
 
@@ -72,6 +83,10 @@ export interface UbuntuAgentApiAdapter {
   listConversations(): Promise<ConversationSummary[]>;
   createConversation(): Promise<string>;
   selectConversation(conversationId: string): Promise<void>;
+  renameConversation(conversationId: string, title: string): Promise<void>;
+  deleteConversation(conversationId: string): Promise<void>;
+  setConversationMemory(conversationId: string, enabled: boolean): Promise<void>;
+  excludeConversationMemory(conversationId: string, messageId: string): Promise<void>;
   sendMessage(content: string, roomId?: string, conversationId?: string): Promise<ConversationMessage>;
 
   // Approval operations

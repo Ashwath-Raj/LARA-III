@@ -31,7 +31,7 @@ export const TopHeader: React.FC = () => {
     calendar: { title: 'Calendar & Deadlines', breadcrumb: 'Planning / Schedule' },
     projects: { title: 'Projects Workspace', breadcrumb: 'Context / Milestones' },
     graph: { title: 'Knowledge Graph', breadcrumb: 'Context / Semantic Network' },
-    workbench: { title: 'Ask LARA', breadcrumb: 'Conversation / Local simulation' },
+    workbench: { title: 'Ask LARA', breadcrumb: 'Conversation / Local model' },
     activity: { title: 'Runs & Reports', breadcrumb: 'Operations / Telemetry' },
     run_console: { title: 'Run console', breadcrumb: 'Operations / Preview & trace' },
     approvals: { title: 'Approval Queue', breadcrumb: 'Governance / High-Risk Gates' },
@@ -101,7 +101,7 @@ export const TopHeader: React.FC = () => {
           }}
         >
           <Radio size={10} />
-          BROWSER DEMO
+          LOCAL BACKEND
         </span>
       </div>
 

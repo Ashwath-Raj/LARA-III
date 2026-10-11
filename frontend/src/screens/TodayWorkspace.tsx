@@ -84,7 +84,7 @@ export const TodayWorkspace: React.FC = () => {
 
       {pendingApprovals.length > 0 && <section className="today-approval-note" aria-label="Pending approvals">
         <ShieldCheck size={17} />
-        <span><strong>{pendingApprovals.length} action{pendingApprovals.length === 1 ? '' : 's'} need your review.</strong> These are simulated approvals; no external action will run.</span>
+        <span><strong>{pendingApprovals.length} action{pendingApprovals.length === 1 ? '' : 's'} need your review.</strong> Approval records are read-only in this interface.</span>
         <button className="text-action" onClick={() => setActiveScreen('approvals')}>Review queue <ArrowRight size={14} /></button>
       </section>}
 
@@ -116,7 +116,7 @@ export const TodayWorkspace: React.FC = () => {
             <button className="section-footer" onClick={() => setActiveScreen('reminders')}>Manage reminders <ArrowRight size={14} /></button>
           </section>
 
-          <p className="prototype-note"><span className="status-pip" /> Local demo data · no provider or notification service connected</p>
+          <p className="prototype-note"><span className="status-pip" /> Saved local tasks and reminders · no job or push notification service connected</p>
         </aside>
       </div>
     </div>

@@ -11,6 +11,7 @@ import React, {
   useEffect,
   useCallback,
   useMemo,
+  useRef,
 } from 'react';
 
 import {
@@ -43,7 +44,7 @@ import {
   CreateAILoopPayload,
 } from '../api/types';
 
-import { MockUbuntuAgentApi } from '../api/mockAdapter';
+import { LocalUbuntuAgentApi } from '../api/localAdapter';
 
 export type DrawerType = 'none' | 'task' | 'node' | 'job' | 'approval';
 
@@ -130,11 +131,19 @@ interface AgentContextType {
   createReminder: (taskId: string, title: string, remindAt: string) => Promise<Reminder>;
 
   updateProject: (projectId: string, patch: Partial<Project>) => Promise<Project>;
+  createProject: (name: string, roomId?: KnowledgeRoom) => Promise<Project>;
+  deleteProject: (projectId: string) => Promise<void>;
   sendMessage: (content: string, roomId?: string, conversationId?: string) => Promise<ConversationMessage>;
   createConversation: () => Promise<void>;
   selectConversation: (conversationId: string) => Promise<void>;
+  renameConversation: (conversationId: string, title: string) => Promise<void>;
+  deleteConversation: (conversationId: string) => Promise<void>;
+  setConversationMemory: (conversationId: string, enabled: boolean) => Promise<void>;
+  excludeConversationMemory: (conversationId: string, messageId: string) => Promise<void>;
 
   createLoop: (payload: CreateAILoopPayload) => Promise<AILoopSession>;
+  runLoop: (loopId: string) => Promise<AILoopSession>;
+  cancelLoop: (loopId: string) => Promise<AILoopSession>;
   postLoopMessage: (loopId: string, role: AILoopRole, content: string, type?: AILoopContributionType, replyToId?: string) => Promise<AILoopSession>;
   selectLoop: (loopId: string) => Promise<AILoopSession>;
 
@@ -159,7 +168,7 @@ interface AgentContextType {
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const api = useMemo(() => new MockUbuntuAgentApi(), []);
+  const api = useMemo(() => new LocalUbuntuAgentApi(), []);
 
   // Shell Layout
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>('workbench');
@@ -202,6 +211,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [loading, setLoading] = useState<boolean>(true);
   const [graphLoadError, setGraphLoadError] = useState<string | null>(null);
   const [canUndoState, setCanUndoState] = useState<boolean>(false);
+  const initialRefreshStarted = useRef(false);
 
   // Derive which drawer is currently active
   const activeDrawerType: DrawerType = useMemo(() => {
@@ -253,7 +263,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setSelectedApproval(app);
   }, [closeAllDrawers]);
 
-  // Initial load from mock API
+  // Load persisted state from the configured adapter.
   const refreshAll = useCallback(async () => {
     try {
       const [t, r, a, j, aud, s, p, g, m, conversationList] = await Promise.all([
@@ -280,7 +290,10 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setGraphLoadError(null);
       setMessages(m);
       setConversations(conversationList);
-      setActiveConversationId(m[0]?.conversationId || await api.createConversation());
+      const conversationId = conversationList[0]?.id || await api.createConversation();
+      await api.selectConversation(conversationId);
+      setActiveConversationId(conversationId);
+      setMessages(await api.listMessages(conversationId));
       setCanUndoState(api.canUndo());
       try {
         const loopList = await api.listLoops();
@@ -300,6 +313,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
 
   useEffect(() => {
+    if (initialRefreshStarted.current) return;
+    initialRefreshStarted.current = true;
     refreshAll();
   }, [refreshAll]);
 
@@ -451,13 +466,26 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [api]
   );
 
+  const createProject = useCallback(async (name: string, roomId: KnowledgeRoom = 'operations') => {
+    const project = await api.createProject(name, roomId);
+    setProjects((prev) => [project, ...prev]);
+    return project;
+  }, [api]);
+
+  const deleteProject = useCallback(async (projectId: string) => {
+    await api.deleteProject(projectId);
+    setProjects((prev) => prev.filter((project) => project.id !== projectId));
+  }, [api]);
+
   const sendMessage = useCallback(
     async (content: string, roomId?: string, conversationId = activeConversationId) => {
-      const agentMsg = await api.sendMessage(content, roomId || activeRoom, conversationId);
-      const allMsgs = await api.listMessages(conversationId);
-      setMessages(allMsgs);
-      setConversations(await api.listConversations());
-      return agentMsg;
+      try {
+        return await api.sendMessage(content, roomId || activeRoom, conversationId);
+      } finally {
+        // The user turn is committed before inference; refresh it even when Ollama fails.
+        setMessages(await api.listMessages(conversationId));
+        setConversations(await api.listConversations());
+      }
     },
     [api, activeRoom, activeConversationId]
   );
@@ -466,11 +494,43 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const id = await api.createConversation();
     setActiveConversationId(id);
     setMessages([]);
+    setConversations(await api.listConversations());
   }, [api]);
 
   const selectConversation = useCallback(async (conversationId: string) => {
     await api.selectConversation(conversationId);
     setActiveConversationId(conversationId);
+    setMessages(await api.listMessages(conversationId));
+  }, [api]);
+
+  const renameConversation = useCallback(async (conversationId: string, title: string) => {
+    await api.renameConversation(conversationId,title);
+    setConversations(await api.listConversations());
+  }, [api]);
+
+  const deleteConversation = useCallback(async (conversationId: string) => {
+    await api.deleteConversation(conversationId);
+    let conversationList = await api.listConversations();
+    if (!conversationList.length) {
+      await api.createConversation();
+      conversationList = await api.listConversations();
+    }
+    setConversations(conversationList);
+    if (activeConversationId === conversationId) {
+      const nextId = conversationList[0].id;
+      await api.selectConversation(nextId);
+      setActiveConversationId(nextId);
+      setMessages(await api.listMessages(nextId));
+    }
+  }, [api, activeConversationId]);
+
+  const setConversationMemory = useCallback(async (conversationId: string, enabled: boolean) => {
+    await api.setConversationMemory(conversationId,enabled);
+    setConversations(await api.listConversations());
+  }, [api]);
+
+  const excludeConversationMemory = useCallback(async (conversationId: string, messageId: string) => {
+    await api.excludeConversationMemory(conversationId,messageId);
     setMessages(await api.listMessages(conversationId));
   }, [api]);
 
@@ -506,10 +566,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const selectLoop = useCallback(async (loopId: string) => {
     try {
-      const existing = loops.find((loop) => loop.id === loopId);
-      const session = existing || await api.getLoop(loopId);
+      const session = await api.getLoop(loopId);
       if (!session) throw new Error('The selected AI Loop session could not be found.');
-      if (!existing) setLoops((previous) => [session, ...previous]);
+      setLoops((previous) => [session, ...previous.filter((item) => item.id !== session.id)]);
       setActiveLoopId(session.id);
       setSelectedLoopParticipantRole(null);
       setActiveScreen('loops');
@@ -520,6 +579,25 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw error;
     }
   }, [api, loops]);
+
+  const runLoop = useCallback(async (loopId: string) => {
+    setLoops((previous) => previous.map((item) => item.id === loopId ? { ...item, status: 'Debating' } : item));
+    try {
+      const updated = await api.runLoop(loopId);
+      setLoops((previous) => previous.map((item) => item.id === loopId ? updated : item));
+      return updated;
+    } catch (error) {
+      const persisted = await api.getLoop(loopId);
+      if (persisted) setLoops((previous) => previous.map((item) => item.id === loopId ? persisted : item));
+      throw error;
+    }
+  }, [api]);
+
+  const cancelLoop = useCallback(async (loopId: string) => {
+    const updated = await api.cancelLoop(loopId);
+    setLoops((previous) => previous.map((item) => item.id === loopId ? updated : item));
+    return updated;
+  }, [api]);
 
   const decideApproval = useCallback(
     async (approvalId: string, decision: 'approve' | 'reject') => {
@@ -672,10 +750,18 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         cancelReminder,
         createReminder,
         updateProject,
+        createProject,
+        deleteProject,
         sendMessage,
         createConversation,
         selectConversation,
+        renameConversation,
+        deleteConversation,
+        setConversationMemory,
+        excludeConversationMemory,
         createLoop,
+        runLoop,
+        cancelLoop,
         postLoopMessage,
         selectLoop,
         decideApproval,

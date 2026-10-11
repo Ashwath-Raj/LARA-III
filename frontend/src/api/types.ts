@@ -75,6 +75,7 @@ export interface UpdateTaskPayload {
   dueTime?: string;
   nextAction?: string;
   personalTargetDate?: string;
+  project?: string | null;
 }
 
 export interface ApprovalDecisionPayload {
