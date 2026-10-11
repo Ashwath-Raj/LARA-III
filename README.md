@@ -85,14 +85,14 @@ python -m ubuntu_agent --db /tmp/lara-loop.sqlite3 loop-cancel LOOP_ID
 
 ## Local REST API
 
-The versioned FastAPI adapter exposes health/readiness, AI Loop, task, reminder, project, calendar-event, conversation, memory-indexing, and audit operations through the existing services and SQLite tables. It binds to `127.0.0.1` only. A one-time pairing token is issued by the CLI, stored as a hash, and exchanged by a browser from an exact configured localhost origin for an HttpOnly, SameSite=Strict cookie. The pairing token cannot be reused after exchange; logout revokes the session. The default origin allowlist is `http://localhost:5173` and `http://127.0.0.1:5173`; override it with a comma-separated `UBUNTU_AGENT_API_ORIGINS` containing exact local origins with ports.
+The versioned FastAPI adapter exposes health/readiness, AI Loop, task, reminder, project, calendar-event, conversation, memory-indexing, and audit operations through the existing services and SQLite tables. It binds to `127.0.0.1` only. A random one-time pairing token is stored as a hash, expires in five minutes, and exchanges for an HttpOnly, SameSite=Strict browser cookie. The cookie is Secure for HTTPS origins, and logout revokes it. State-changing requests require the exact paired `Origin`; originless requests are limited to safe reads. By default only `http://localhost:5173` and `http://127.0.0.1:5173` are trusted. Explicit HTTPS origins may be set with `UBUNTU_AGENT_API_ORIGINS`; public origins are never derived from a request Host header.
 
 ```sh
 python -m ubuntu_agent --db /tmp/lara-api.sqlite3 api-session-create --origin http://localhost:5173
 python -m ubuntu_agent --db /tmp/lara-api.sqlite3 api-serve --port 8765
 ```
 
-Exchange the displayed pairing token once with `POST http://localhost:8765/api/v1/auth/session`, a JSON body `{"pairing_token":"..."}`, and `Origin: http://localhost:5173`; the browser must accept cookies and send credentials on subsequent requests. API calls require that exact `Origin`. `/api/v1/health` is a data-free liveness endpoint; `/api/v1/ready` checks SQLite and probes only the configured local Ollama endpoint. OpenAPI is available at `/api/v1/openapi.json`.
+For local development, pair from `http://localhost:5173`. For a temporary HTTPS tunnel, obtain its URL from ngrok, then set `LARA_PUBLIC_ORIGIN` to that exact origin when starting the application. Vite accepts only the configured tunnel hostname, proxies `/api` to `127.0.0.1:8765` with a loopback upstream Host header, and preserves the browser Origin for backend validation. Forward only port 5173 through ngrok; do not tunnel port 8765 or Ollama. The HTTPS pairing response sets a Secure cookie. `/api/v1/health` is a data-free liveness endpoint; `/api/v1/ready` reports SQLite, local Ollama, and memory status without inference. OpenAPI is available at `/api/v1/openapi.json`.
 
 The companion `FossxHacktober-ui/frontend` now uses the authenticated local API through a Vite same-origin proxy. Tasks, reminders, AI Loop sessions, and conversations persist in SQLite. Chat calls the configured local Ollama model and persists the user turn before inference, so provider failures do not discard it. Loop runs are synchronous and the interface waits for the returned persisted state.
 
@@ -106,7 +106,7 @@ In one terminal, from the backend repository:
 ./scripts/start-lara-dev.sh
 ```
 
-The script initializes the selected database without resetting it, issues a one-time pairing token for `http://localhost:5173`, starts the backend on loopback and starts Vite. Paste the printed token into the LARA IV connection form. Ollama must be running with the configured `OLLAMA_MODEL` for chat and AI Loop inference. For conversational memory, install `.[rag]` and pull `embeddinggemma`; without these, chat remains available and reports memory indexing as unavailable. Set `LARA_DB_PATH` to select a disposable database for development. Normal migrations create its schema; no demo records are seeded.
+The script initializes the selected database without resetting it, checks backend/model/memory readiness, issues a five-minute pairing token for the configured origin, starts the backend on loopback, then starts Vite. Paste the token into the LARA IV connection form. For local use, run `./scripts/start-lara-dev.sh`. For ngrok, first start your tunnel forwarding to `127.0.0.1:5173`, then run `LARA_PUBLIC_ORIGIN=https://YOUR-ACTUAL-NGROK-HOST ./scripts/start-lara-dev.sh`; use the same exact URL in the browser. The script configures Vite's explicit allowed-host entry and backend origin for that process only. Ollama must be running with the configured `OLLAMA_MODEL` for chat and AI Loop inference. For conversational memory, install `.[rag]` and pull `embeddinggemma`; without these, chat remains available and reports memory indexing as unavailable. Set `LARA_DB_PATH` to select a disposable database for development. Normal migrations create or upgrade its schema; no demo records are seeded.
 
 ## Local memory (Phase 3)
 

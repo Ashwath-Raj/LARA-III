@@ -331,6 +331,60 @@ class MemoryService:
         if decision.decision != DecisionKind.ALLOW:
             raise MemoryDeniedError("Memory access denied.")
 
+    def _authorized_memory_dependency(self, connection: sqlite3.Connection, document_id: str,
+                                      actor: Actor, version: int | None = None,
+                                      visiting: set[str] | None = None) -> bool:
+        """Reauthorize a retrieved source and every conversational source derived from it."""
+        visiting = set() if visiting is None else visiting
+        if document_id in visiting or len(visiting) >= 16:
+            return False
+        visiting.add(document_id)
+        document = connection.execute(
+            """SELECT room_id,sensitivity_label,active_version,deleted_at,ingestion_status,cleanup_status
+               FROM documents WHERE id=?""", (document_id,),
+        ).fetchone()
+        if (document is None or document["deleted_at"] is not None or
+                document["ingestion_status"] != "ready" or document["cleanup_status"] != "clean" or
+                (version is not None and document["active_version"] != version)):
+            return False
+        try:
+            self._authorize(actor, document["room_id"], document["sensitivity_label"],
+                            "memory.search", document_id)
+        except MemoryDeniedError:
+            return False
+
+        source = connection.execute(
+            """SELECT s.status,s.assistant_message_id,c.deleted_at,c.memory_enabled
+               FROM conversation_memory_sources s JOIN conversations c ON c.id=s.conversation_id
+               WHERE s.document_id=? LIMIT 1""", (document_id,),
+        ).fetchone()
+        if source is None:
+            return True
+        if source["status"] != "indexed" or source["deleted_at"] is not None or not source["memory_enabled"]:
+            return False
+        assistant = connection.execute(
+            "SELECT retrieved_memory_json FROM conversation_messages WHERE id=?",
+            (source["assistant_message_id"],),
+        ).fetchone()
+        if assistant is None:
+            return False
+        try:
+            dependencies = json.loads(assistant["retrieved_memory_json"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(dependencies, list):
+            return False
+        for reference in dependencies:
+            if not isinstance(reference, dict) or not isinstance(reference.get("document_id"), str):
+                return False
+            dependency_version = reference.get("version")
+            if dependency_version is not None and (type(dependency_version) is not int or dependency_version < 1):
+                return False
+            if not self._authorized_memory_dependency(
+                    connection, reference["document_id"], actor, dependency_version, visiting.copy()):
+                return False
+        return True
+
     def _trusted_room(self, room_id: str | None, actor: Actor, action: str, resource: str):
         if not room_id:
             raise MemoryDeniedError("Memory access denied.")
@@ -633,12 +687,7 @@ class MemoryService:
                           WHERE c.id=?""", (chunk_id,)).fetchone()
                 if not row or row["room_id"] not in allowed:
                     continue
-                conversational_source = conn.execute("""SELECT s.status,c.deleted_at,c.memory_enabled
-                    FROM conversation_memory_sources s JOIN conversations c ON c.id=s.conversation_id
-                    WHERE s.document_id=? LIMIT 1""", (row["document_id"],)).fetchone()
-                if conversational_source and (conversational_source["status"] != "indexed" or
-                                               conversational_source["deleted_at"] is not None or
-                                               not conversational_source["memory_enabled"]):
+                if not self._authorized_memory_dependency(conn, row["document_id"], actor, row["version"]):
                     continue
                 if (row["document_room_id"] != row["room_id"] or
                         row["document_sensitivity"] != row["sensitivity_label"] or

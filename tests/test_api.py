@@ -9,11 +9,12 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from ubuntu_agent.api import ApiError, MAX_REQUEST_BYTES, ApiSessionService, PairingRateLimiter, create_app
+from ubuntu_agent.api import ApiError, MAX_REQUEST_BYTES, ApiSessionService, PairingRateLimiter, configured_origins, create_app
 from ubuntu_agent.cli import main
 from ubuntu_agent.database import Database
 from ubuntu_agent.loop.orchestrator import LoopOrchestrator
 from ubuntu_agent.loop.role_protocol import ROLE_SCHEMAS
+from ubuntu_agent.memory import MemoryService
 from ubuntu_agent.models import Actor
 from ubuntu_agent.providers import GenerationResult
 
@@ -79,6 +80,40 @@ class FakeConversationMemory:
     def delete_document(self, document_id, actor):
         self.deleted.append(document_id)
         return {"document_id": document_id, "status": "deleted"}
+
+
+class TinyEmbedder:
+    model = "api-memory-fake"
+    dimensions = 3
+
+    def embed(self, texts):
+        return [[float(len(text)), 1.0, 2.0] for text in texts]
+
+
+class TinyVectorStore:
+    dimensions = 3
+
+    def __init__(self):
+        self.items = {}
+        self.fail_delete = False
+
+    def upsert(self, points):
+        self.items.update({point["id"]:point for point in points})
+
+    def search(self, vector, *, room_ids, limit):
+        return [(point_id, 0.9) for point_id in list(self.items)[:limit]]
+
+    def contains(self, point_ids):
+        return [point_id for point_id in point_ids if point_id in self.items]
+
+    def delete(self, point_ids):
+        if self.fail_delete:
+            raise RuntimeError("simulated vector deletion outage")
+        for point_id in point_ids:
+            self.items.pop(point_id, None)
+
+    def reset(self, dimensions):
+        self.items.clear()
 
 
 class TestApiContract(unittest.TestCase):
@@ -155,6 +190,48 @@ class TestApiContract(unittest.TestCase):
         self.assertEqual(False, disabled.json()["memory_enabled"])
         self.assertEqual([], self.memory.deleted)
 
+    def test_excluding_a_memory_invalidates_indexed_answers_derived_from_it(self):
+        vectors = TinyVectorStore()
+        memory = MemoryService(self.database, TinyEmbedder(), vectors, data_dir=self.tempdir.name)
+        app = create_app(
+            self.database,
+            loop_orchestrator=self.orchestrator,
+            allowed_origins=(ORIGIN,),
+            provider_probe=lambda: {"status":"available", "provider":"ollama", "model":"test"},
+            conversation_generator=lambda prompt, actor, room: GenerationResult("ollama", "test-gemma", "The code is QA-SHARD-971."),
+            memory_service=memory,
+        )
+        client = TestClient(app, base_url="http://localhost:8765")
+        token, _ = ApiSessionService(self.database, (ORIGIN,)).issue_pairing_token([ORIGIN])
+        paired = client.post("/api/v1/auth/session", json={"pairing_token":token}, headers={"Origin":ORIGIN})
+        self.assertEqual(200, paired.status_code, paired.text)
+        headers = {"Origin":ORIGIN}
+        source_conversation = client.post("/api/v1/conversations", json={}, headers=headers).json()
+        source_reply = client.post(f"/api/v1/conversations/{source_conversation['id']}/messages",
+                                   json={"content":"Remember the test code QA-SHARD-971."}, headers=headers)
+        self.assertEqual("indexed", source_reply.json()["memory_status"])
+        derived_conversation = client.post("/api/v1/conversations", json={}, headers=headers).json()
+        derived_reply = client.post(f"/api/v1/conversations/{derived_conversation['id']}/messages",
+                                    json={"content":"What was the test code?"}, headers=headers)
+        self.assertEqual(source_conversation["id"], derived_reply.json()["retrieved_memories"][0]["conversation_id"])
+        with self.database.connect() as connection:
+            source_row = connection.execute("SELECT user_message_id,document_id FROM conversation_memory_sources WHERE conversation_id=?",
+                                            (source_conversation["id"],)).fetchone()
+            derived_document = connection.execute("SELECT document_id FROM conversation_memory_sources WHERE conversation_id=?",
+                                                  (derived_conversation["id"],)).fetchone()[0]
+        vectors.fail_delete = True
+        excluded = client.post(f"/api/v1/conversations/{source_conversation['id']}/memory/{source_row['user_message_id']}/exclude",
+                               headers=headers)
+        self.assertEqual("excluded", excluded.json()["status"])
+        with self.database.connect() as connection:
+            statuses = {row["document_id"]:row["status"] for row in connection.execute(
+                "SELECT document_id,status FROM conversation_memory_sources WHERE document_id IN (?,?)",
+                (source_row["document_id"], derived_document))}
+        self.assertEqual({source_row["document_id"]:"excluded", derived_document:"excluded"}, statuses)
+        self.assertEqual([], memory.search_memory("QA-SHARD-971", "after source exclusion",
+                                                  Actor("local-user", "task_deadline_manager")))
+        client.close()
+
     def test_detected_secret_exchange_is_never_indexed(self):
         conversation_id = self.client.post("/api/v1/conversations", json={}, headers={"Origin":ORIGIN}).json()["id"]
         response = self.client.post(f"/api/v1/conversations/{conversation_id}/messages",
@@ -210,6 +287,59 @@ class TestApiContract(unittest.TestCase):
         self.assertEqual(204, logout.status_code)
         self.assertEqual(401, self.client.get("/api/v1/loops", headers={"Origin": ORIGIN}).status_code)
         replay_client.close()
+
+    def test_https_tunnel_pairing_sets_secure_cookie_and_requires_origin_for_writes(self):
+        tunnel_origin = "https://lara-demo.ngrok-free.app"
+        tunnel_app = create_app(
+            self.database,
+            loop_orchestrator=self.orchestrator,
+            allowed_origins=(tunnel_origin,),
+            provider_probe=lambda: {"status": "model_missing", "provider": "ollama", "model": "test"},
+            conversation_generator=lambda prompt, actor, room: GenerationResult("ollama", "test-gemma", "answer"),
+            memory_service=self.memory,
+        )
+        client = TestClient(tunnel_app, base_url="https://localhost:8765")
+        token, _ = ApiSessionService(self.database, (tunnel_origin,)).issue_pairing_token([tunnel_origin])
+        paired = client.post("/api/v1/auth/session", json={"pairing_token": token}, headers={"Origin": tunnel_origin})
+        self.assertEqual(200, paired.status_code, paired.text)
+        cookie = paired.headers["set-cookie"].lower()
+        self.assertIn("secure", cookie)
+        self.assertIn("httponly", cookie)
+        self.assertIn("samesite=strict", cookie)
+        self.assertEqual(200, client.get("/api/v1/tasks").status_code)  # safe same-origin read may omit Origin
+        mutation = client.post("/api/v1/tasks", json={"title":"must be protected","category":"Personal / Admin"})
+        self.assertEqual(403, mutation.status_code)
+        bad_origin = client.post("/api/v1/tasks", json={"title":"must be protected","category":"Personal / Admin"},
+                                 headers={"Origin":"https://evil.example"})
+        self.assertIn(bad_origin.status_code, (401, 403))
+        logout = client.delete("/api/v1/auth/session", headers={"Origin":tunnel_origin})
+        self.assertEqual(204, logout.status_code)
+        self.assertIn("secure", logout.headers.get("set-cookie", "").lower())
+        client.close()
+
+    def test_pairing_token_has_separate_five_minute_expiry(self):
+        token, _ = ApiSessionService(self.database, (ORIGIN,)).issue_pairing_token([ORIGIN])
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT created_at,pairing_expires_at,expires_at FROM local_api_sessions WHERE token_hash=?",
+                                     (ApiSessionService._hash(token),)).fetchone()
+            created = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+            pairing_expiry = datetime.fromisoformat(row["pairing_expires_at"].replace("Z", "+00:00"))
+            session_expiry = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+        self.assertEqual(300, int((pairing_expiry-created).total_seconds()))
+        self.assertGreater((session_expiry-created).total_seconds(), 300)
+        with self.database.connect() as connection:
+            connection.execute("UPDATE local_api_sessions SET pairing_expires_at='1970-01-01T00:00:00Z' WHERE token_hash=?",
+                               (ApiSessionService._hash(token),))
+        with self.assertRaises(ApiError):
+            ApiSessionService(self.database, (ORIGIN,)).consume_pairing_token(token, ORIGIN)
+
+    def test_https_origins_are_explicit_and_http_is_limited_to_loopback(self):
+        self.assertEqual(("https://lara-demo.ngrok-free.app",),
+                         configured_origins(("https://lara-demo.ngrok-free.app",)))
+        with self.assertRaises(ValueError):
+            configured_origins(("http://public.example:8080",))
+        with self.assertRaises(ValueError):
+            configured_origins(("https://lara-demo.ngrok-free.app/",))
 
     def test_unauthenticated_and_untrusted_origin_requests_are_rejected(self):
         client = TestClient(self.app, base_url="http://localhost:8765")
@@ -345,7 +475,7 @@ class TestApiContract(unittest.TestCase):
     def test_cli_reports_invalid_api_origin_without_traceback(self):
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, \
-                patch.dict(os.environ, {"UBUNTU_AGENT_API_ORIGINS": "https://invalid.example"}), \
+                patch.dict(os.environ, {"UBUNTU_AGENT_API_ORIGINS": "http://invalid.example:5173"}), \
                 contextlib.redirect_stderr(stderr):
             result = main(["--db", f"{directory}/api.sqlite3", "api-serve", "--port", "8876"])
         self.assertEqual(2, result)

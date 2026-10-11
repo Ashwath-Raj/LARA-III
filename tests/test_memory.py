@@ -245,6 +245,43 @@ class MemoryTests(unittest.TestCase):
         self.memory.delete_document(document_id, self.manager)
         self.assertEqual([], self.memory.search_memory("note", "test", self.manager))
 
+    def test_excluded_memory_invalidates_conversation_answers_derived_from_it(self):
+        original = Path(self.temp.name) / "original.md"
+        original.write_text("Original private code QA-SHARD-971 was provided.", encoding="utf-8")
+        original_doc = self.memory.ingest_document(original, self.manager, "operations")
+        derived = Path(self.temp.name) / "derived.md"
+        derived.write_text("An answer repeated QA-SHARD-971 after retrieval.", encoding="utf-8")
+        derived_doc = self.memory.ingest_document(derived, self.manager, "operations")
+        with self.db.connect() as conn:
+            version = conn.execute("SELECT active_version FROM documents WHERE id=?",
+                                   (original_doc["document_id"],)).fetchone()[0]
+            now = "2026-01-01T00:00:00Z"
+            conversations = ("conversation-original", "conversation-derived")
+            for conversation_id in conversations:
+                conn.execute("INSERT INTO conversations(id,principal_id,room_id,title,memory_enabled,created_at,updated_at) VALUES(?,'local-user','operations','saved exchange',1,?,?)",
+                             (conversation_id, now, now))
+            message_ids = ("original-user", "original-assistant", "derived-user", "derived-assistant")
+            conn.execute("INSERT INTO conversation_messages(id,conversation_id,sender,content,status,created_at) VALUES(?,'conversation-original','user','Original memory source','complete',?)",
+                         (message_ids[0], now))
+            conn.execute("INSERT INTO conversation_messages(id,conversation_id,sender,content,status,created_at) VALUES(?,'conversation-original','assistant','Noted','complete',?)",
+                         (message_ids[1], now))
+            conn.execute("INSERT INTO conversation_messages(id,conversation_id,sender,content,status,created_at) VALUES(?,'conversation-derived','user','Recall the code','complete',?)",
+                         (message_ids[2], now))
+            conn.execute("INSERT INTO conversation_messages(id,conversation_id,sender,content,status,retrieved_memory_json,created_at) VALUES(?,'conversation-derived','assistant','QA-SHARD-971','complete',?,?)",
+                         (message_ids[3], json.dumps([{"document_id":original_doc["document_id"],"version":version}]), now))
+            conn.execute("INSERT INTO conversation_memory_sources(user_message_id,assistant_message_id,conversation_id,document_id,status,created_at,updated_at) VALUES(?,?,'conversation-original',?,'indexed',?,?)",
+                         (message_ids[0], message_ids[1], original_doc["document_id"], now, now))
+            conn.execute("INSERT INTO conversation_memory_sources(user_message_id,assistant_message_id,conversation_id,document_id,status,created_at,updated_at) VALUES(?,?,'conversation-derived',?,'indexed',?,?)",
+                         (message_ids[2], message_ids[3], derived_doc["document_id"], now, now))
+        before = self.memory.search_memory("QA-SHARD-971", "test derived retrieval", self.manager)
+        self.assertIn(derived_doc["document_id"], [item["citation"]["document_id"] for item in before])
+        with self.db.connect() as conn:
+            conn.execute("UPDATE conversation_memory_sources SET status='excluded' WHERE user_message_id=?",
+                         (message_ids[0],))
+        self.memory.delete_document(original_doc["document_id"], self.manager)
+        after = self.memory.search_memory("QA-SHARD-971", "excluded source must not leak by derivation", self.manager)
+        self.assertEqual([], after)
+
     def test_reconciliation_retries_pending_delete_idempotently(self):
         self.memory.ingest_document(self.file, self.manager, "operations")
         doc_id = self.memory.search_memory("note", "test", self.manager)[0]["citation"]["document_id"]

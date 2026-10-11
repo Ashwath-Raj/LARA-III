@@ -127,16 +127,17 @@ class ApiSessionService:
         token = secrets.token_urlsafe(32)
         now = datetime.now(timezone.utc)
         expires = (now + timedelta(hours=ttl_hours)).isoformat(timespec="seconds").replace("+00:00", "Z")
+        pairing_expires = (now + timedelta(minutes=5)).isoformat(timespec="seconds").replace("+00:00", "Z")
         with self.database.connect() as connection:
             connection.execute("DELETE FROM local_api_sessions WHERE expires_at<=?",
                                (now.isoformat(timespec="seconds").replace("+00:00", "Z"),))
             connection.execute(
-                """INSERT INTO local_api_sessions(id,token_hash,origin_allowlist_json,created_at,expires_at)
-                   VALUES(?,?,?,?,?)""",
+                """INSERT INTO local_api_sessions(id,token_hash,origin_allowlist_json,created_at,expires_at,pairing_expires_at)
+                   VALUES(?,?,?,?,?,?)""",
                 (str(uuid.uuid4()), self._hash(token), json.dumps(origins),
-                 now.isoformat(timespec="seconds").replace("+00:00", "Z"), expires),
+                 now.isoformat(timespec="seconds").replace("+00:00", "Z"), expires, pairing_expires),
             )
-        return token, expires
+        return token, pairing_expires
 
     def consume_pairing_token(self, token: str, origin: str | None) -> tuple[str, str]:
         if (not isinstance(token, str) or not 40 <= len(token) <= 128 or
@@ -150,7 +151,7 @@ class ApiSessionService:
                 "SELECT * FROM local_api_sessions WHERE token_hash=?",
                 (self._hash(token),),
             ).fetchone()
-            if row is None or row["expires_at"] <= now:
+            if row is None or row["expires_at"] <= now or not row["pairing_expires_at"] or row["pairing_expires_at"] <= now:
                 raise ApiError(401, "UNAUTHORIZED", "A valid local pairing token is required.")
             try:
                 session_origins = json.loads(row["origin_allowlist_json"])
@@ -164,8 +165,10 @@ class ApiSessionService:
             )
         return session_token, row["expires_at"]
 
-    def authenticate(self, token: str | None, origin: str | None) -> dict[str, Any]:
-        if not isinstance(token, str) or not token or origin not in self.allowed_origins:
+    def authenticate(self, token: str | None, origin: str | None, *, allow_missing_origin: bool = False) -> dict[str, Any]:
+        if (not isinstance(token, str) or not token or
+                (origin is None and not allow_missing_origin) or
+                (origin is not None and origin not in self.allowed_origins)):
             raise ApiError(401, "UNAUTHORIZED", "A valid local API session is required.")
         with self.database.connect() as connection:
             row = connection.execute(
@@ -178,7 +181,7 @@ class ApiSessionService:
             session_origins = json.loads(row["origin_allowlist_json"])
         except (TypeError, json.JSONDecodeError):
             raise ApiError(401, "UNAUTHORIZED", "A valid local API session is required.") from None
-        if origin not in session_origins:
+        if origin is not None and origin not in session_origins:
             raise ApiError(403, "ORIGIN_DENIED", "This browser origin is not authorized.")
         return dict(row)
 
@@ -202,12 +205,19 @@ def normalize_origin(origin: str) -> str:
         port = parsed.port
     except ValueError as exc:
         raise ValueError("Invalid local browser origin.") from exc
-    if (parsed.scheme != "http" or hostname not in {"localhost", "127.0.0.1"}
-            or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
-        raise ValueError("Only exact HTTP localhost browser origins are permitted.")
-    if port is None or not 1 <= port <= 65535:
-        raise ValueError("A local browser origin must include an explicit port.")
-    if origin != f"http://{hostname}:{port}":
+    if (parsed.scheme not in {"http", "https"} or not hostname or
+            parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
+        raise ValueError("Browser origins must be canonical HTTP localhost or HTTPS origins.")
+    if parsed.scheme == "http" and hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("Non-local browser origins must use HTTPS.")
+    if parsed.scheme == "http" and port is None:
+        raise ValueError("A localhost browser origin must include its explicit port.")
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("Browser origin port is invalid.")
+    origin_host = f"[{hostname}]" if ":" in hostname else hostname
+    default_port = 443 if parsed.scheme == "https" else 80
+    canonical = f"{parsed.scheme}://{origin_host}" + (f":{port}" if port is not None and port != default_port else "")
+    if origin != canonical:
         raise ValueError("Browser origins must use their canonical exact form.")
     return origin
 
@@ -218,7 +228,7 @@ def configured_origins(origins: list[str] | tuple[str, ...] | None = None) -> tu
         origins = tuple(item.strip() for item in configured.split(",") if item.strip()) if configured else DEFAULT_ALLOWED_ORIGINS
     normalized = tuple(normalize_origin(origin) for origin in origins)
     if not normalized or len(set(normalized)) != len(normalized):
-        raise ValueError("At least one unique local browser origin must be configured.")
+        raise ValueError("At least one unique browser origin must be configured.")
     return normalized
 
 
@@ -409,8 +419,11 @@ def create_app(
 
     def require_session(request: Request) -> dict[str, Any]:
         origin = request.headers.get("origin")
+        safe_method = request.method in {"GET", "HEAD", "OPTIONS"}
+        if not origin and not safe_method:
+            raise ApiError(403, "ORIGIN_REQUIRED", "State-changing requests require the paired browser origin.")
         token = request.cookies.get(SESSION_COOKIE)
-        session = sessions.authenticate(token, origin)
+        session = sessions.authenticate(token, origin, allow_missing_origin=safe_method)
         request.state.api_session_id = session["id"]
         return session
 
@@ -554,7 +567,7 @@ def create_app(
             token,
             max_age=max_age,
             httponly=True,
-            secure=False,
+            secure=urlsplit(origin).scheme == "https",
             samesite="strict",
             path=API_PREFIX,
         )
@@ -567,7 +580,9 @@ def create_app(
     @app.delete(f"{API_PREFIX}/auth/session", status_code=204)
     async def revoke_session(request: Request, response: Response, session=Depends(require_session)):
         sessions.revoke(request.cookies.get(SESSION_COOKIE))
-        response.delete_cookie(SESSION_COOKIE, path=API_PREFIX, httponly=True, samesite="strict")
+        origin = request.headers.get("origin") or ""
+        response.delete_cookie(SESSION_COOKIE, path=API_PREFIX, httponly=True,
+                               secure=urlsplit(origin).scheme == "https", samesite="strict")
         response.status_code = 204
         return response
 
@@ -896,11 +911,50 @@ def create_app(
         connection.execute(f"UPDATE documents SET deleted_at=COALESCE(deleted_at,?),ingestion_status='deleted',cleanup_status='pending',updated_at=? WHERE id IN ({placeholders})",
                            (now, now, *document_ids))
 
+    def invalidate_dependent_conversation_memories(connection, document_ids: list[str]) -> tuple[list[str], list[str]]:
+        """Tombstone indexed exchanges whose answers were derived from removed memories."""
+        invalidated = {item for item in document_ids if isinstance(item, str) and item}
+        if not invalidated:
+            return [], []
+        dependent_documents: set[str] = set()
+        dependent_messages: set[str] = set()
+        while True:
+            changed = False
+            rows = connection.execute("""SELECT s.user_message_id,s.assistant_message_id,s.document_id,m.retrieved_memory_json
+                FROM conversation_memory_sources s JOIN conversation_messages m ON m.id=s.assistant_message_id
+                WHERE s.status IN ('indexed','pending','failed') AND s.document_id IS NOT NULL""").fetchall()
+            for row in rows:
+                document_id = row["document_id"]
+                if document_id in invalidated:
+                    continue
+                try:
+                    references = json.loads(row["retrieved_memory_json"] or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    references = []
+                if not isinstance(references, list):
+                    continue
+                if not any(isinstance(ref, dict) and ref.get("document_id") in invalidated for ref in references):
+                    continue
+                invalidated.add(document_id)
+                dependent_documents.add(document_id)
+                dependent_messages.add(row["user_message_id"])
+                connection.execute("UPDATE conversation_memory_sources SET status='excluded',updated_at=? WHERE user_message_id=?",
+                                   (utc_timestamp(), row["user_message_id"]))
+                connection.execute("UPDATE conversation_messages SET memory_status='excluded' WHERE id IN (?,?)",
+                                   (row["user_message_id"], row["assistant_message_id"]))
+                changed = True
+            if not changed:
+                break
+        mark_memory_documents_deleted(connection, list(invalidated))
+        return sorted(dependent_documents), sorted(dependent_messages)
+
     @app.patch(f"{API_PREFIX}/conversations/{{conversation_id}}")
     async def update_conversation(conversation_id: str, payload: dict[str, Any], actor: Actor = Depends(task_actor)):
         if set(payload) - {"title", "memory_enabled"} or not payload:
             raise ApiError(422, "INVALID_REQUEST", "Only title and memory_enabled can be updated.")
         source_ids: list[str] = []
+        dependent_ids: list[str] = []
+        dependent_messages: list[str] = []
         with database.connect() as connection:
             row = conversation_owner(connection, conversation_id, actor.principal_id)
             title = payload.get("title", row["title"])
@@ -920,14 +974,15 @@ def create_app(
                     "SELECT user_message_id FROM conversation_memory_sources WHERE conversation_id=?", (conversation_id,)).fetchall()]
                 connection.execute("UPDATE conversation_messages SET memory_status='excluded' WHERE conversation_id=?",
                                    (conversation_id,))
+                dependent_ids, dependent_messages = invalidate_dependent_conversation_memories(connection, source_ids)
             else:
                 source_messages = []
-        for document_id in source_ids:
+        for document_id in set(source_ids + dependent_ids):
             try:
                 get_memory_service().delete_document(document_id, actor)
             except Exception as exc:
                 logger.warning("Disabled conversation memory cleanup deferred exception_type=%s", type(exc).__name__)
-        for message_id in source_messages:
+        for message_id in set(source_messages + dependent_messages):
             try:
                 (memory_root / f"{message_id}.md").unlink(missing_ok=True)
             except OSError:
@@ -943,12 +998,13 @@ def create_app(
             sources = [dict(item) for item in connection.execute(
                 "SELECT document_id FROM conversation_memory_sources WHERE conversation_id=? AND document_id IS NOT NULL",
                 (conversation_id,)).fetchall()]
-            mark_memory_documents_deleted(connection, [item["document_id"] for item in sources])
+            source_ids = [item["document_id"] for item in sources]
+            dependent_ids, dependent_messages = invalidate_dependent_conversation_memories(connection, source_ids)
             connection.execute("UPDATE conversations SET deleted_at=?,updated_at=? WHERE id=?",
                                (utc_timestamp(), utc_timestamp(), conversation_id))
-        for source in sources:
+        for document_id in set(source_ids + dependent_ids):
             try:
-                get_memory_service().delete_document(source["document_id"], actor)
+                get_memory_service().delete_document(document_id, actor)
             except Exception as exc:
                 logger.warning("Deleted conversation vector cleanup deferred exception_type=%s", type(exc).__name__)
         with database.connect() as connection:
@@ -956,7 +1012,7 @@ def create_app(
         try:
             for path in memory_root.glob("*.md"):
                 # Message IDs are UUID filenames; only remove files referenced by this conversation.
-                if path.stem in message_ids:
+                if path.stem in set(message_ids + dependent_messages):
                     path.unlink(missing_ok=True)
         except OSError:
             pass
@@ -979,13 +1035,15 @@ def create_app(
                                (utc_timestamp(), message_id))
             connection.execute("UPDATE conversation_messages SET memory_status='excluded' WHERE id IN (?,?)",
                                (message_id, source["assistant_message_id"]))
-        if doc_id:
+            dependent_ids, dependent_messages = invalidate_dependent_conversation_memories(connection, [doc_id] if doc_id else [])
+        for document_id in set(([doc_id] if doc_id else []) + dependent_ids):
             try:
-                get_memory_service().delete_document(doc_id, actor)
+                get_memory_service().delete_document(document_id, actor)
             except Exception as exc:
                 logger.warning("Conversation memory deletion deferred exception_type=%s", type(exc).__name__)
         try:
-            (memory_root / f"{message_id}.md").unlink(missing_ok=True)
+            for source_message_id in set([message_id] + dependent_messages):
+                (memory_root / f"{source_message_id}.md").unlink(missing_ok=True)
         except OSError:
             logger.warning("Excluded conversation source cleanup failed")
         return {"message_id": message_id, "status": "excluded"}

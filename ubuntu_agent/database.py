@@ -375,6 +375,10 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
       principal_id TEXT PRIMARY KEY, settings_json TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     """),
+    (12, """
+    ALTER TABLE local_api_sessions ADD COLUMN pairing_expires_at TEXT;
+    UPDATE local_api_sessions SET pairing_expires_at=created_at;
+    """),
 )
 
 

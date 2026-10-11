@@ -112,8 +112,8 @@ def parser() -> argparse.ArgumentParser:
     desktop_preflight = commands.add_parser("desktop-preflight", help="Check local desktop capability without running automation")
     api_session = commands.add_parser("api-session-create", help="Create a one-time local browser pairing token")
     api_session.add_argument("--origin", action="append", required=True,
-                             help="Exact configured localhost browser origin; repeat for additional allowed origins")
-    api_session.add_argument("--ttl-hours", type=int, default=8, help="Session lifetime after pairing (1-24 hours)")
+                             help="Exact configured localhost HTTP or HTTPS browser origin; repeat for additional allowed origins")
+    api_session.add_argument("--ttl-hours", type=int, default=8, help="Session lifetime after pairing (1-24 hours; pairing token expires in five minutes)")
     api = commands.add_parser("api-serve", help="Serve the authenticated local REST API on loopback")
     api.add_argument("--port", type=int, default=8765)
     approvals = commands.add_parser("approvals", help="List pending approvals")
@@ -208,14 +208,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "api-session-create":
         try:
             session_service = ApiSessionService(db, configured_origins())
-            token, expires_at = session_service.issue_pairing_token(args.origin, ttl_hours=args.ttl_hours)
+            token, pairing_expires_at = session_service.issue_pairing_token(args.origin, ttl_hours=args.ttl_hours)
         except (AgentError, ValueError) as exc:
             code = exc.code if isinstance(exc, AgentError) else "API_CONFIGURATION_ERROR"
             print(json.dumps({"error": {"code": code, "message": str(exc)}}), file=sys.stderr)
             return 2
         print(json.dumps({
             "pairing_token": token,
-            "expires_at": expires_at,
+            "pairing_expires_at": pairing_expires_at,
+            "session_duration_hours": args.ttl_hours,
             "allowed_origins": args.origin,
             "note": "Use once in the local browser to create an HttpOnly session cookie.",
         }))
