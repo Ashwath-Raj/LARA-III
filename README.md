@@ -17,7 +17,9 @@ task, reminder, and conversation data persist locally.
 - Node.js 20.19+ or 22.12+ (required by Vite 8)
 - npm
 - Optional for local inference: [Ollama](https://ollama.com/)
-- Optional for vector-backed memory: a local Qdrant endpoint
+- Optional for retrieval-backed memory: the Qdrant client extra and Ollama's
+  `embeddinggemma` model. Qdrant uses local embedded storage; no separate server
+  is required.
 
 ## Install
 
@@ -42,9 +44,16 @@ default model:
 ollama pull gemma4:e2b-it-q4_K_M
 ```
 
-The default local embedding model is `embeddinggemma`. Vector memory additionally
-requires a local Qdrant service; without it the API remains available and reports
-memory readiness as degraded.
+To enable local conversational retrieval memory, install its optional backend
+dependency and fetch the embedding model:
+
+```sh
+backend/.venv/bin/python -m pip install -e 'backend[rag]'
+ollama pull embeddinggemma
+```
+
+Without the optional Qdrant client or embedding model, the API remains available
+and reports memory readiness as degraded.
 
 ## Run locally
 
