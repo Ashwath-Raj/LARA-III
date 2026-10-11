@@ -10,6 +10,8 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
+.vite/
 
 # Secrets
 .env
@@ -23,8 +25,20 @@ data/
 *.db
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+qdrant_storage/
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
 browser-profiles/
 screenshots/
 
 # Python packaging artifacts
 *.egg-info/
+
+# This directory contains checked-in UI mock fixtures, not runtime user data.
+!frontend/src/data/
+!frontend/src/data/**

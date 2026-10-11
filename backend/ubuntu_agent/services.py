@@ -169,7 +169,7 @@ class TaskService(BaseService):
         if not isinstance(candidate, dict):
             raise ValidationError("Task candidate must be an object.")
         candidate_fields = {"title", "description", "item_type", "status", "priority", "category", "room_id", "project_id",
-                            "due_date", "due_at", "timezone", "source_text"}
+                            "due_date", "due_at", "timezone", "source_text", "is_sticky", "sticky_color"}
         if set(candidate) - candidate_fields:
             raise ValidationError("Task candidate contains unsupported fields.")
         title = _validate_string(candidate.get("title"), "title", maximum=300)
@@ -200,6 +200,15 @@ class TaskService(BaseService):
         if room_id not in ROOM_SENSITIVITY:
             raise ValidationError("Unknown task room.")
         source_text = _validate_string(candidate.get("source_text", ""), "source_text", required=False)
+        is_sticky = candidate.get("is_sticky", False)
+        sticky_color = candidate.get("sticky_color")
+        if type(is_sticky) is not bool or (
+            sticky_color is not None
+            and (not isinstance(sticky_color, str) or sticky_color not in {"beige", "white", "ash"})
+        ):
+            raise ValidationError("Sticky note metadata is invalid.")
+        if sticky_color is not None and not is_sticky:
+            raise ValidationError("A sticky note color requires is_sticky=true.")
         task_id = str(uuid.uuid4())
         now = utc_now()
         with self.database.connect() as connection:
@@ -212,6 +221,9 @@ class TaskService(BaseService):
                 "due_date": due_date, "due_at": due_at, "timezone": timezone_name, "source_text": source_text}
             if project_id is not None:
                 fingerprint_fields["project_id"] = project_id
+            if is_sticky or sticky_color is not None:
+                fingerprint_fields["is_sticky"] = is_sticky
+                fingerprint_fields["sticky_color"] = sticky_color
             fingerprint = _fingerprint(fingerprint_fields)
             if idempotency_key:
                 if not isinstance(actor, Actor) or type(actor.principal_id) is not str or type(actor.persona_id) is not str:
@@ -233,10 +245,10 @@ class TaskService(BaseService):
                 if project is None:
                     raise ValidationError("Project is unavailable in this task room.")
             connection.execute("""INSERT INTO tasks
-              (id,title,description,item_type,status,priority,category_id,project_id,room_id,persona_owner,due_date,due_at,timezone,source_text,created_at,updated_at,idempotency_key)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+              (id,title,description,item_type,status,priority,category_id,project_id,room_id,persona_owner,due_date,due_at,timezone,source_text,created_at,updated_at,idempotency_key,is_sticky,sticky_color)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)""",
               (task_id,title,description,item_type,status,priority,category_row["id"],project_id,room_id,actor.persona_id,due_date,due_at,
-               timezone_name,source_text,now,now))
+               timezone_name,source_text,now,now,int(is_sticky),sticky_color))
             if idempotency_key:
                 connection.execute("""INSERT INTO task_idempotency_keys
                     (principal_id,persona_id,idempotency_key,request_fingerprint,task_id,created_at)
@@ -259,11 +271,20 @@ class TaskService(BaseService):
             self._authorize(connection, actor, row["room_id"], task_id, "task.read", hide_denial=True)
             return self._task_row(connection, task_id)
 
-    def list_tasks(self, actor: Actor, *, status: str | None = None) -> list[dict[str, Any]]:
+    def list_tasks(
+        self, actor: Actor, *, status: str | None = None, room_id: str | None = None
+    ) -> list[dict[str, Any]]:
         if status is not None and (type(status) is not str or status not in TASK_STATUSES):
             raise ValidationError("Invalid task status.")
+        if room_id is not None and (type(room_id) is not str or room_id not in ROOM_SENSITIVITY):
+            raise ValidationError("Unknown task room.")
         with self.database.connect() as connection:
-            rows = connection.execute("SELECT id,room_id FROM tasks WHERE (? IS NULL OR status=?) ORDER BY due_date,created_at", (status,status)).fetchall()
+            rows = connection.execute(
+                """SELECT id,room_id FROM tasks
+                   WHERE (? IS NULL OR status=?) AND (? IS NULL OR room_id=?)
+                   ORDER BY due_date,created_at""",
+                (status, status, room_id, room_id),
+            ).fetchall()
             result = []
             for row in rows:
                 try:
@@ -500,4 +521,3 @@ class ReminderService(BaseService):
                     f"reminder:{row['id']}:generation:{row['generation']}")
                 queued += 1
         return {"eligible": len(rows), "enqueued": queued}
-

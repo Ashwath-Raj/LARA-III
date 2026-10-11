@@ -37,6 +37,7 @@ export const InboxScreen: React.FC = () => {
   const [noteTitle, setNoteTitle] = useState('');
   const [noteCategory, setNoteCategory] = useState<TaskCategory>('Personal/Admin');
   const [noteError, setNoteError] = useState('');
+  const [isSavingNote, setIsSavingNote] = useState(false);
 
   // Filter tasks in inbox state, or all tasks matching query
   const inboxTasks = tasks.filter((t) => {
@@ -61,7 +62,8 @@ export const InboxScreen: React.FC = () => {
   const regularInbox = sortedTasks.filter((t) => !t.isSticky);
 
   const handleCreateNote = async () => {
-    if (!noteTitle.trim()) return;
+    if (!noteTitle.trim() || isSavingNote) return;
+    setIsSavingNote(true);
     setNoteError('');
     try {
       await createTask({
@@ -75,8 +77,10 @@ export const InboxScreen: React.FC = () => {
       });
       setNoteTitle('');
       setShowAddNote(false);
-    } catch {
-      setNoteError('The note was not saved. Your title is still here; check browser storage and try again.');
+    } catch (error) {
+      setNoteError(error instanceof Error ? `The note could not be saved: ${error.message}` : 'The note could not be saved. Try again.');
+    } finally {
+      setIsSavingNote(false);
     }
   };
 
@@ -182,8 +186,8 @@ export const InboxScreen: React.FC = () => {
               <option value="Opportunities">Opportunities</option>
             </select>
 
-            <button onClick={handleCreateNote} className="u-btn u-btn-primary" style={{ fontSize: '12px' }}>
-              Pin Note
+            <button onClick={handleCreateNote} className="u-btn u-btn-primary" style={{ fontSize: '12px' }} disabled={isSavingNote}>
+              {isSavingNote ? 'Saving…' : 'Pin Note'}
             </button>
           </div>
           {noteError && <p className="inbox-error" role="alert">{noteError}</p>}

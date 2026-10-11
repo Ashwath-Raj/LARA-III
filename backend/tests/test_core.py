@@ -53,6 +53,39 @@ class CoreTests(unittest.TestCase):
                              connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0])
             self.assertIsNotNone(connection.execute("SELECT 1 FROM sqlite_master WHERE name='task_idempotency_keys'").fetchone())
 
+    def test_sticky_migration_preserves_existing_tasks_and_defaults_regular_tasks(self):
+        legacy = Database(Path(self.temp.name) / "sticky-migration.sqlite3")
+        with patch("ubuntu_agent.database.MIGRATIONS", MIGRATIONS[:12]):
+            legacy.initialize()
+        with legacy.connect() as connection:
+            category_id = connection.execute(
+                "SELECT id FROM categories WHERE name='Personal / Admin'"
+            ).fetchone()[0]
+            connection.execute(
+                """INSERT INTO tasks
+                   (id,title,item_type,status,priority,category_id,room_id,timezone,created_at,updated_at)
+                   VALUES ('existing-task','Existing task','task','inbox','normal',?,'operations','UTC','now','now')""",
+                (category_id,),
+            )
+
+        legacy.initialize()
+        with legacy.connect() as connection:
+            existing = connection.execute(
+                "SELECT title,is_sticky,sticky_color FROM tasks WHERE id='existing-task'"
+            ).fetchone()
+            self.assertEqual(("Existing task", 0, None), tuple(existing))
+            self.assertEqual(13, connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0])
+
+        service = TaskService(legacy)
+        regular = service.create_task({"title": "Regular task"}, self.actor)
+        sticky = service.create_task(
+            {"title": "Sticky note", "is_sticky": True, "sticky_color": "ash"}, self.actor
+        )
+        self.assertFalse(regular["is_sticky"])
+        self.assertIsNone(regular["sticky_color"])
+        self.assertTrue(sticky["is_sticky"])
+        self.assertEqual("ash", sticky["sticky_color"])
+
     def test_migration_backfills_existing_idempotency_records(self):
         legacy = Database(Path(self.temp.name) / "legacy.sqlite3")
         with patch("ubuntu_agent.database.MIGRATIONS", MIGRATIONS[:1]):
@@ -97,6 +130,23 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(DecisionKind.DENY, engine.evaluate_access(None).decision)
         self.assertEqual(DecisionKind.DENY, engine.evaluate_access({}).decision)
         self.assertEqual(DecisionKind.DENY, engine.evaluate_access(AccessContext(**(base | {"action_id": []}))).decision)
+
+    def test_task_room_write_grants_do_not_enable_other_write_actions(self):
+        engine = PolicyEngine()
+        for persona, room, sensitivity in (
+            ("task_deadline_manager", "opportunities", "internal"),
+            ("ai_ml_researcher", "public_research", "public"),
+        ):
+            task_context = AccessContext(
+                "local-user", persona, None, room, "task-1", "task.create",
+                sensitivity, "local", RiskTier.PREPARE.value, "normal",
+            )
+            memory_context = AccessContext(
+                "local-user", persona, None, room, "document-1", "memory.ingest",
+                sensitivity, "local", RiskTier.PREPARE.value, "normal",
+            )
+            self.assertEqual(DecisionKind.ALLOW, engine.evaluate_access(task_context).decision)
+            self.assertEqual(DecisionKind.DENY, engine.evaluate_access(memory_context).decision)
 
     def test_policy_evaluation_exception_is_denied_at_service_boundary(self):
         task = self.tasks.create_task({"title": "Protected"}, self.actor)

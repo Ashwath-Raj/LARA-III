@@ -10,6 +10,7 @@ from unittest.mock import patch
 from ubuntu_agent.cli import main
 from ubuntu_agent.database import Database
 from ubuntu_agent.demo_seed import (
+    DEMO_COMPLETE_LOOP_ID,
     DEMO_LOOP_ID,
     DEMO_MARKER,
     DEMO_WORKSPACE_ID,
@@ -40,11 +41,16 @@ class DemoSeedTests(unittest.TestCase):
         result = self.seed()
 
         self.assertEqual("seeded", result["status"])
-        self.assertEqual(9, result["counts"]["tasks"])
-        self.assertEqual(3, result["counts"]["reminders"])
-        self.assertEqual(1, result["counts"]["ai_loops"])
-        self.assertEqual(4, result["counts"]["loop_roles"])
-        self.assertEqual(1, result["counts"]["loop_rounds"])
+        self.assertEqual(30, result["counts"]["tasks"])
+        self.assertEqual(9, result["counts"]["reminders"])
+        self.assertEqual(6, result["counts"]["projects"])
+        self.assertEqual(9, result["counts"]["conversations"])
+        self.assertEqual(54, result["counts"]["conversation_messages"])
+        self.assertEqual(14, result["counts"]["calendar_events"])
+        self.assertEqual(3, result["counts"]["ai_loops"])
+        self.assertEqual(12, result["counts"]["loop_roles"])
+        self.assertEqual(5, result["counts"]["loop_rounds"])
+        self.assertEqual(14, result["counts"]["knowledge_items"])
         self.assertEqual(1, result["counts"]["loop_sources"])
         self.assertEqual(1, result["counts"]["loop_artifacts"])
         self.assertEqual(1, result["counts"]["desktop_workspaces"])
@@ -81,21 +87,21 @@ class DemoSeedTests(unittest.TestCase):
         TaskService(self.db).transition_task(sample["id"], "next", actor)
         second = self.seed()
 
-        self.assertEqual(9, first["counts"]["tasks"])
+        self.assertEqual(30, first["counts"]["tasks"])
         self.assertEqual(0, sum(second["created"].values()))
-        self.assertEqual(9, second["counts"]["tasks"])
+        self.assertEqual(30, second["counts"]["tasks"])
         preserved = TaskService(self.db).get_task(user_task["id"], actor)
         self.assertEqual("User's existing task", preserved["title"])
         with self.db.connect() as connection:
             self.assertEqual("next", connection.execute(
                 "SELECT status FROM tasks WHERE id=?", (sample["id"],)
             ).fetchone()["status"])
-            self.assertEqual(10, connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
-            self.assertEqual(3, connection.execute("SELECT COUNT(*) FROM reminders").fetchone()[0])
+            self.assertEqual(31, connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
+            self.assertEqual(9, connection.execute("SELECT COUNT(*) FROM reminders").fetchone()[0])
             self.assertEqual("User-edited demo reminder", connection.execute(
                 "SELECT message FROM reminders WHERE id=?", (reminder["id"],)
             ).fetchone()["message"])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM ai_loops").fetchone()[0])
+            self.assertEqual(3, connection.execute("SELECT COUNT(*) FROM ai_loops").fetchone()[0])
             self.assertEqual(1, connection.execute(
                 "SELECT COUNT(*) FROM desktop_workspaces WHERE id=?", (DEMO_WORKSPACE_ID,)
             ).fetchone()[0])
@@ -136,6 +142,45 @@ class DemoSeedTests(unittest.TestCase):
             ).fetchone()[0])
         self.assertGreaterEqual(counts["overdue_active_tasks"], 1)
         self.assertGreaterEqual(counts["due_within_7_days"], 1)
+
+    def test_seeded_workspace_relationships_and_role_outputs_are_explicitly_synthetic(self):
+        self.seed()
+        with self.db.connect() as connection:
+            self.assertEqual(30, connection.execute(
+                "SELECT COUNT(*) FROM tasks WHERE project_id IN (SELECT id FROM projects WHERE description LIKE 'Synthetic demo project%')"
+            ).fetchone()[0])
+            self.assertEqual(9, connection.execute(
+                "SELECT COUNT(*) FROM conversations WHERE title LIKE '[Synthetic demo] %'"
+            ).fetchone()[0])
+            self.assertEqual(54, connection.execute(
+                "SELECT COUNT(*) FROM conversation_messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.title LIKE '[Synthetic demo] %'"
+            ).fetchone()[0])
+            self.assertEqual(4, connection.execute(
+                "SELECT COUNT(*) FROM loop_rounds WHERE loop_id=? AND provider_id='demo_seed' AND model_id='synthetic'",
+                (DEMO_COMPLETE_LOOP_ID,),
+            ).fetchone()[0])
+            self.assertEqual(1, connection.execute(
+                "SELECT COUNT(*) FROM loop_execution_state WHERE loop_id=? AND status='succeeded' AND invocation_count=0",
+                (DEMO_COMPLETE_LOOP_ID,),
+            ).fetchone()[0])
+            self.assertEqual(14, connection.execute(
+                "SELECT COUNT(*) FROM calendar_events WHERE description LIKE 'Synthetic demo event%'"
+            ).fetchone()[0])
+
+    def test_reseed_does_not_reset_a_user_modified_demo_loop(self):
+        self.seed()
+        with self.db.connect() as connection:
+            connection.execute("UPDATE ai_loops SET status='failed' WHERE id=?", (DEMO_COMPLETE_LOOP_ID,))
+            connection.execute("UPDATE loop_execution_state SET status='failed',error_class='user_reviewed' WHERE loop_id=?",
+                               (DEMO_COMPLETE_LOOP_ID,))
+        self.seed()
+        with self.db.connect() as connection:
+            self.assertEqual("failed", connection.execute(
+                "SELECT status FROM ai_loops WHERE id=?", (DEMO_COMPLETE_LOOP_ID,)
+            ).fetchone()[0])
+            self.assertEqual("failed", connection.execute(
+                "SELECT status FROM loop_execution_state WHERE loop_id=?", (DEMO_COMPLETE_LOOP_ID,)
+            ).fetchone()[0])
 
     def test_demo_loop_is_visibly_synthetic_and_not_marked_as_executed(self):
         self.seed()
@@ -213,7 +258,7 @@ class DemoSeedTests(unittest.TestCase):
                 self.seed(environment="production", allow_non_development=True)
             result = self.seed(environment="production", allow_non_development=True,
                                allow_production=True)
-        self.assertEqual(9, result["counts"]["tasks"])
+        self.assertEqual(30, result["counts"]["tasks"])
 
     def test_cli_requires_explicit_database_and_checks_environment_before_initializing(self):
         error = io.StringIO()

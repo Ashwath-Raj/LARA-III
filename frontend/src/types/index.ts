@@ -345,6 +345,14 @@ export interface ConversationSummary {
   memoryEnabled?: boolean;
 }
 
+export interface MemoryReadiness {
+  status: 'checking' | 'ready' | 'degraded' | 'unavailable';
+  reason?: string | null;
+  embedding_model?: string;
+  embedding_model_status?: string;
+  vector_store_status?: string;
+}
+
 // AI Loop Domain Models
 export type AILoopRole = 'red_team' | 'blue_team' | 'judge' | 'reviewer';
 

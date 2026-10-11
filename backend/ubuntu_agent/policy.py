@@ -47,6 +47,11 @@ OPERATOR_ACTIONS = {
 }
 OPERATOR_PERSONAS = {"task_deadline_manager", "desktop_operator"}
 APPROVAL_REQUIRED_ACTIONS = {"desktop.consequential"}
+TASK_WRITE_ACTIONS = {"task.create", "task.update", "task.transition", "task.delete"}
+TASK_ROOM_WRITE_GRANTS = {
+    ("task_deadline_manager", "opportunities"),
+    ("ai_ml_researcher", "public_research"),
+}
 ROOM_ACCESS = {
     "task_manager": {"operations": "rw", "academic": "r", "projects": "r", "public_research": "r", "opportunities": "r"},
     "study_coach": {"operations": "r", "academic": "rw", "public_research": "r"},
@@ -138,6 +143,10 @@ class PolicyEngine:
             return PolicyDecision(DecisionKind.ALLOW, POLICY_ID, "Allowed by the default persona and room policy.", utc_now())
         permission = ROOM_ACCESS[PERSONAS[context.persona_id][2]][context.room_id]
         is_write = action != RiskTier.READ
+        if context.action_id in TASK_WRITE_ACTIONS and (
+            context.persona_id, context.room_id
+        ) in TASK_ROOM_WRITE_GRANTS:
+            permission = "rw"
         if permission != "rw" and (permission != "r" or is_write):
             return self._deny("Persona action is not permitted in this room.")
         return PolicyDecision(DecisionKind.ALLOW, POLICY_ID, "Allowed by the default persona and room policy.", utc_now())

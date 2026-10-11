@@ -130,7 +130,7 @@ function MessageText({ message, onRetryMemory, onExcludeMemory, retrying }: { me
 
 export const AgentWorkbench: React.FC = () => {
   const { messages, conversations, activeConversationId, sendMessage, createConversation, selectConversation, renameConversation, deleteConversation,
-    setConversationMemory, excludeConversationMemory, activeRoom, setActiveScreen, openRunPreview } = useAgent();
+    setConversationMemory, excludeConversationMemory, memoryReadiness, activeRoom, setActiveScreen, openRunPreview } = useAgent();
   const [input, setInput] = useState('');
   const [focused, setFocused] = useState(false);
   const [sending, setSending] = useState(false);
@@ -238,13 +238,21 @@ export const AgentWorkbench: React.FC = () => {
       <div className="ask-actions">
         <NotificationPopover />
         {activeConversation && <button className="quiet-action" aria-pressed={!!activeConversation.memoryEnabled}
-          onClick={() => void setConversationMemory(activeConversation.id,!activeConversation.memoryEnabled).catch(() => setError('Conversation memory setting could not be saved.'))}>
+          title={memoryReadiness.status === 'ready' ? 'Long-term memory is available locally.' : memoryReadiness.reason || 'Checking local long-term memory availability.'}
+          onClick={() => void setConversationMemory(activeConversation.id,!activeConversation.memoryEnabled).catch((reason: unknown) => setError(
+            reason instanceof Error ? `Conversation memory setting could not be saved: ${reason.message}` : 'Conversation memory setting could not be saved.'
+          ))}>
           Memory {activeConversation.memoryEnabled ? 'On' : 'Off'}
         </button>}
         {active && <button className="quiet-action" onClick={() => void startConversation()}><MessageSquarePlus size={15} />New chat</button>}
         <button ref={historyTriggerRef} className="quiet-action" onClick={() => setHistoryOpen(true)} aria-haspopup="dialog"><Clock3 size={15} />History</button>
       </div>
     </header>
+
+    {memoryReadiness.status !== 'ready' && <p className="memory-availability" role="status">
+      {memoryReadiness.status === 'checking' ? 'Checking local long-term memory…'
+        : `Long-term memory unavailable: ${memoryReadiness.reason || 'The local embedding model or vector store is not ready.'}`}
+    </p>}
 
     {active ? <div className="chat-stage">
       <AgentNetworkBackground />
@@ -313,4 +321,3 @@ export const AgentWorkbench: React.FC = () => {
     </div>}
   </section>;
 };
-

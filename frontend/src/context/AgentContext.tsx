@@ -30,6 +30,7 @@ import {
   KnowledgeGraphEdge,
   ConversationMessage,
   ConversationSummary,
+  MemoryReadiness,
   AILoopSession,
   AILoopRole,
   AILoopContributionType,
@@ -103,6 +104,7 @@ interface AgentContextType {
   graphEdges: KnowledgeGraphEdge[];
   messages: ConversationMessage[];
   conversations: ConversationSummary[];
+  memoryReadiness: MemoryReadiness;
   activeConversationId: string;
   loops: AILoopSession[];
   activeLoopId: string;
@@ -202,6 +204,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [graphEdges, setGraphEdges] = useState<KnowledgeGraphEdge[]>([]);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [memoryReadiness, setMemoryReadiness] = useState<MemoryReadiness>({ status: 'checking' });
   const [activeConversationId, setActiveConversationId] = useState('');
   const [loops, setLoops] = useState<AILoopSession[]>([]);
   const [activeLoopId, setActiveLoopId] = useState<string>('');
@@ -265,6 +268,12 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Load persisted state from the configured adapter.
   const refreshAll = useCallback(async () => {
+    void api.getMemoryReadiness().then(setMemoryReadiness).catch((error: unknown) => {
+      setMemoryReadiness({
+        status: 'unavailable',
+        reason: error instanceof Error ? error.message : 'Local memory availability could not be checked.',
+      });
+    });
     try {
       const [t, r, a, j, aud, s, p, g, m, conversationList] = await Promise.all([
         api.listTasks(),
@@ -349,8 +358,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const created = await api.createTask(payload);
       setTasks((prev) => [created, ...prev]);
       setCanUndoState(api.canUndo());
-      const updatedAudits = await api.listAuditEvents();
-      setAuditEvents(updatedAudits);
+      // The task write has committed by this point. A nonessential activity-feed
+      // refresh must not turn a successful save into a reported save failure.
+      try {
+        const updatedAudits = await api.listAuditEvents();
+        setAuditEvents(updatedAudits);
+      } catch (error) {
+        console.error('Task saved, but the activity feed could not refresh.', error);
+      }
       return created;
     },
     [api]
@@ -726,6 +741,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         graphEdges,
         messages,
         conversations,
+        memoryReadiness,
         activeConversationId,
         loading,
         graphLoadError,

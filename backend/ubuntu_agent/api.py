@@ -33,7 +33,7 @@ from .bootstrap import PRINCIPAL_ID
 from .database import Database
 from .loop.orchestrator import LoopOrchestrator
 from .models import Actor
-from .memory import MemoryService
+from .memory import MemoryError as LocalMemoryError, MemoryService
 from .policy import ROOM_ACCESS
 from .provider_config import ProviderConfig
 from .providers import OllamaProvider, ProviderError, ProviderTimeoutError, ProviderUnavailableError, ProviderRouter
@@ -262,6 +262,8 @@ class TaskCreateRequest(StrictModel):
     timezone: str = Field(default="UTC", min_length=1, max_length=64)
     item_type: Literal["task", "assignment", "exam", "event", "idea", "follow_up", "research_job", "reminder"] = "task"
     project_id: str | None = Field(default=None, max_length=100)
+    is_sticky: bool = False
+    sticky_color: Literal["beige", "white", "ash"] | None = None
 
 
 class TaskPatchRequest(StrictModel):
@@ -436,7 +438,7 @@ def create_app(
         allow_origins=list(origins),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "Idempotency-Key"],
         max_age=300,
     )
 
@@ -456,6 +458,18 @@ def create_app(
 
     def task_actor(_: dict[str, Any] = Depends(require_session)) -> Actor:
         return Actor(PRINCIPAL_ID, "task_deadline_manager")
+
+    def task_writer_for_room(room_id: str) -> Actor:
+        if room_id == "academic":
+            return Actor(PRINCIPAL_ID, "exam_study_coach")
+        if room_id in {"projects", "public_research"}:
+            return Actor(PRINCIPAL_ID, "ai_ml_researcher")
+        return Actor(PRINCIPAL_ID, "task_deadline_manager")
+
+    def task_writer_for_existing(task_id: str) -> Actor:
+        with database.connect() as connection:
+            row = connection.execute("SELECT room_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        return task_writer_for_room(row["room_id"] if row is not None else "operations")
 
     def loop_actor(_: dict[str, Any] = Depends(require_session)) -> Actor:
         return Actor(PRINCIPAL_ID, "desktop_operator")
@@ -531,14 +545,45 @@ def create_app(
             logger.error("Local provider probe failed exception_type=%s", type(exc).__name__)
             provider_status = {"status": "probe_failed", "provider": "ollama",
                                "model": provider_config.ollama_model if provider_config else None}
-        qdrant_path = database.path.parent / "qdrant"
         qdrant_sdk = importlib.util.find_spec("qdrant_client") is not None
-        vector_status = ("present_unverified" if qdrant_path.is_dir() else "not_initialized")
+        vector_status = "not_checked"
         embedding_model = os.getenv("UBUNTU_AGENT_EMBEDDING_MODEL", "embeddinggemma")
         installed_models = provider_status.get("installed_models", []) if isinstance(provider_status, dict) else []
         embedding_status = ("available" if any(name == embedding_model or name.startswith(embedding_model + ":")
                              for name in installed_models if isinstance(name, str)) else
                             "model_missing" if installed_models else "not_checked")
+        memory_reason = None
+        memory_status = "degraded"
+        if not qdrant_sdk:
+            vector_status = "unavailable"
+            memory_reason = "Optional Qdrant dependencies are not installed."
+        else:
+            try:
+                memory_service = get_memory_service()
+                vector = await run_in_threadpool(memory_service.check_embedding_available)
+                embedding_status = "available"
+            except LocalMemoryError as exc:
+                memory_reason = str(exc)
+                embedding_status = "unavailable"
+                if memory_instance is None:
+                    vector_status = "unavailable"
+            except Exception as exc:
+                logger.warning("Local memory embedding readiness failed exception_type=%s", type(exc).__name__)
+                memory_reason = "Local embedding readiness check failed."
+                embedding_status = "unavailable"
+            else:
+                try:
+                    await run_in_threadpool(memory_service.check_vector_store_available, vector)
+                except LocalMemoryError as exc:
+                    memory_reason = str(exc)
+                    vector_status = "unavailable"
+                except Exception as exc:
+                    logger.warning("Local vector readiness failed exception_type=%s", type(exc).__name__)
+                    memory_reason = "Local vector-store readiness check failed."
+                    vector_status = "unavailable"
+                else:
+                    vector_status = "ready"
+                    memory_status = "ready"
         ready = database_status == "ready"
         return JSONResponse(
             status_code=200 if ready else 503,
@@ -546,15 +591,15 @@ def create_app(
                 "status": "ready" if ready else "unavailable",
                 "database": database_status,
                 "local_model": provider_status,
-                "vector_store": {"status": vector_status, "sdk_available": qdrant_sdk},
+                "vector_store": {"status": vector_status, "sdk_available": qdrant_sdk,
+                                 "reason": memory_reason if vector_status == "unavailable" else None},
                 "conversations": {"status": "available", "storage": "sqlite"},
-                "memory": {"status": "ready" if qdrant_sdk and embedding_status == "available" else "degraded",
+                "memory": {"status": memory_status, "reason": memory_reason,
                            "automatic_indexing": True, "embedding_model": embedding_model,
                            "embedding_dimensions": int(os.getenv("UBUNTU_AGENT_EMBEDDING_DIMENSIONS", "768")),
                            "embedding_model_status": embedding_status,
                            "vector_store_status": vector_status, "sqlite_authoritative": True},
                 "capability_limitations": [
-                    "Vector-store presence is reported but not probed by this read-only readiness check.",
                     "The AI Loop runs synchronously; it is not a background worker.",
                 ],
             },
@@ -696,8 +741,9 @@ def create_app(
     @app.post(f"{API_PREFIX}/tasks", status_code=201)
     async def create_task(payload: TaskCreateRequest, request: Request, actor: Actor = Depends(task_actor)):
         key = request.headers.get("idempotency-key")
-        if key is not None and (not key or len(key) > 300):
-            raise ValidationError("Idempotency-Key must contain 1 to 300 characters.")
+        if key is not None and (not key or len(key) > 200):
+            raise ValidationError("Idempotency-Key must contain 1 to 200 characters.")
+        actor = task_writer_for_room(payload.room_id)
         return await run_in_threadpool(
             task_service.create_task,
             payload.model_dump(), actor, key,
@@ -707,30 +753,44 @@ def create_app(
     async def list_tasks(status: str | None = None, limit: int = 20, offset: int = 0,
                          actor: Actor = Depends(task_actor)):
         _validate_page(limit, offset)
-        items = await run_in_threadpool(task_service.list_tasks, actor, status=status)
+        room_ids = ("operations", "academic", "projects", "public_research", "opportunities")
+        items = []
+        for room_id in room_ids:
+            writer = task_writer_for_room(room_id)
+            items.extend(await run_in_threadpool(
+                task_service.list_tasks, writer, status=status, room_id=room_id
+            ))
+        items.sort(key=lambda task: (
+            task["due_date"] or "9999-12-31",
+            task["created_at"],
+        ))
         return _page(items, limit, offset)
 
     @app.get(f"{API_PREFIX}/tasks/{{task_id}}")
     async def get_task(task_id: str, actor: Actor = Depends(task_actor)):
-        return await run_in_threadpool(task_service.get_task, task_id, actor)
+        writer = await run_in_threadpool(task_writer_for_existing, task_id)
+        return await run_in_threadpool(task_service.get_task, task_id, writer)
 
     @app.patch(f"{API_PREFIX}/tasks/{{task_id}}")
     async def update_task(task_id: str, payload: TaskPatchRequest, actor: Actor = Depends(task_actor)):
         patch = payload.model_dump(exclude_unset=True)
         if not patch:
             raise ValidationError("Patch must contain at least one supported field.")
-        return await run_in_threadpool(task_service.update_task, task_id, patch, actor)
+        writer = await run_in_threadpool(task_writer_for_existing, task_id)
+        return await run_in_threadpool(task_service.update_task, task_id, patch, writer)
 
     @app.post(f"{API_PREFIX}/tasks/{{task_id}}/transitions")
     async def transition_task(task_id: str, payload: TaskTransitionRequest,
                               actor: Actor = Depends(task_actor)):
+        writer = await run_in_threadpool(task_writer_for_existing, task_id)
         return await run_in_threadpool(
-            task_service.transition_task, task_id, payload.target_status, actor, evidence=payload.evidence,
+            task_service.transition_task, task_id, payload.target_status, writer, evidence=payload.evidence,
         )
 
     @app.delete(f"{API_PREFIX}/tasks/{{task_id}}", status_code=204)
     async def delete_task(task_id: str, actor: Actor = Depends(task_actor)):
-        await run_in_threadpool(task_service.delete_task, task_id, actor)
+        writer = await run_in_threadpool(task_writer_for_existing, task_id)
+        await run_in_threadpool(task_service.delete_task, task_id, writer)
         return Response(status_code=204)
 
     @app.get(f"{API_PREFIX}/reminders")
@@ -895,12 +955,15 @@ def create_app(
     @app.get(f"{API_PREFIX}/conversations")
     async def list_conversations(actor: Actor = Depends(task_actor)):
         with database.connect() as connection:
-            rows = connection.execute("""SELECT c.id,c.title,c.updated_at,
+            rows = connection.execute("""SELECT c.id,c.title,c.updated_at,c.memory_enabled,
                 (SELECT COUNT(*) FROM conversation_messages m WHERE m.conversation_id=c.id) AS message_count,
                 (SELECT content FROM conversation_messages m WHERE m.conversation_id=c.id ORDER BY rowid DESC LIMIT 1) AS preview
                 FROM conversations c WHERE c.principal_id=? AND c.deleted_at IS NULL ORDER BY c.updated_at DESC""",
                 (actor.principal_id,)).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {**dict(row), "memory_enabled": bool(row["memory_enabled"])}
+            for row in rows
+        ]
 
     @app.post(f"{API_PREFIX}/conversations", status_code=201)
     async def create_conversation(payload: ConversationCreateRequest, actor: Actor = Depends(task_actor)):
@@ -924,6 +987,13 @@ def create_app(
             r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{20,}", r"\bAKIA[A-Z0-9]{16}\b", r"\bAIza[0-9A-Za-z_-]{30,}\b",
             r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
             r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+        )
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def has_memory_exclusion_instruction(text: str) -> bool:
+        patterns = (
+            r"(?i)\bexclude(?:\s+(?:this|that|it|message|exchange|conversation))?\s+(?:from|out of)\s+(?:my\s+)?long[- ]term memory\b",
+            r"(?i)\b(?:do not|don't|never|please don't)\s+(?:store|save|remember|add|index)\b.{0,80}\b(?:long[- ]term memory|memory)\b",
         )
         return any(re.search(pattern, text) for pattern in patterns)
 
@@ -1202,7 +1272,12 @@ def create_app(
                                (assistant_id, conversation_id, result.text, result.provider_id, result.model_id,
                                 json.dumps(memory_references, ensure_ascii=False), completed))
             connection.execute("UPDATE conversations SET updated_at=? WHERE id=?", (completed, conversation_id))
-            memory_status = "disabled" if not conversation["memory_enabled"] else "excluded" if has_secret_material(payload.content) or has_secret_material(result.text) else "pending"
+            explicitly_excluded = has_memory_exclusion_instruction(payload.content)
+            memory_status = (
+                "disabled" if not conversation["memory_enabled"]
+                else "excluded" if explicitly_excluded or has_secret_material(payload.content) or has_secret_material(result.text)
+                else "pending"
+            )
             if conversation["memory_enabled"]:
                 connection.execute("UPDATE conversation_messages SET memory_status=? WHERE id IN (?,?)",
                                    (memory_status, user_id, assistant_id))

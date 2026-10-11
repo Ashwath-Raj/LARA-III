@@ -131,7 +131,7 @@ Memory endpoints must not reveal denied resources through result counts, titles,
 
 ### Implemented local HTTP API slice
 
-The backend exposes these routes through FastAPI and the existing services. Every data route requires a one-time CLI pairing exchange followed by an HttpOnly, SameSite=Strict cookie. Requests must carry an exact allowlisted `Origin`; CORS never uses a wildcard. The server-created actors are fixed by route group (`task_deadline_manager` for tasks/reminders and `desktop_operator` for loops). Clients cannot supply principal, persona, room grants, or policy filters.
+The backend exposes these routes through FastAPI and the existing services. Every data route requires a one-time CLI pairing exchange followed by an HttpOnly, SameSite=Strict cookie. Requests must carry an exact allowlisted `Origin`; CORS never uses a wildcard. Task actors are selected server-side from the task's room and owner scope; clients cannot supply principal, persona, room grants, or policy filters. The `task_deadline_manager` and `ai_ml_researcher` receive task-mutation-only grants for opportunity and public-research tasks respectively; these grants do not broaden other write actions. The `desktop_operator` remains the actor for loops.
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -178,6 +178,10 @@ The backend exposes these routes through FastAPI and the existing services. Ever
 | `POST` | `/api/v1/calendar/events` | Create a timezone-aware calendar event |
 | `POST` | `/api/v1/calendar/events/{event_id}/cancel` | Cancel a scheduled event |
 | `GET` | `/api/v1/audit-events` | Read bounded safe audit summaries for the local principal |
+
+Task creation accepts `is_sticky` (default `false`) and `sticky_color` (`beige`, `white`, or `ash`); a color is valid only for a sticky task. Task responses include both fields. Browser requests may send a 1–200 character `Idempotency-Key`; CORS explicitly permits that header alongside `Content-Type`.
+
+Conversation history is persisted in SQLite independently of long-term memory. Each conversation's `memory_enabled` setting is persisted and returned by the conversation list. When enabled, eligible exchanges are embedded locally and indexed; explicit requests to exclude an exchange and detected secret material are never indexed. Readiness probes the configured embedding model and local vector search path and returns a reason when memory is degraded.
 
 The API binds to `127.0.0.1` by default through the CLI. Pairing tokens are random, expire after five minutes, are consumed once, and are stored only as SHA-256 hashes. Sessions expire after 1-24 hours (8 by default). Exact browser origins are configured by `UBUNTU_AGENT_API_ORIGINS`: HTTP is limited to loopback origins with explicit ports, and an explicitly configured HTTPS origin may be used behind a TLS tunnel. The browser session cookie is HttpOnly, SameSite=Strict, path-scoped to `/api/v1`, and Secure when paired from HTTPS. State-changing requests require an exact allowlisted Origin; originless safe reads are permitted because same-origin GET fetches commonly omit Origin. The auth exchange is rate-limited. The frontend proxy rewrites the upstream Host to loopback and never derives trusted origins from Host or forwarded headers. Health/readiness never invokes model inference or contacts hosted providers. Error responses use the standard envelope and omit exception traces and request contents.
 

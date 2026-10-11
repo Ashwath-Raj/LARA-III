@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from urllib.error import HTTPError, URLError
 from urllib import request
 
 from .bootstrap import PERSONAS as TRUSTED_PERSONAS, PRINCIPAL_ID, ROOMS as TRUSTED_ROOMS
@@ -75,6 +76,15 @@ class EmbeddingAdapter:
                                   headers={"Content-Type": "application/json"}, method="POST")
             try:
                 payload = json.loads(self.transport(req, self.timeout))
+            except HTTPError as exc:
+                exc.close()
+                if exc.code == 404:
+                    raise EmbeddingError(f"Ollama embedding model '{self.model}' is unavailable (HTTP 404).") from exc
+                raise EmbeddingError(f"Ollama embedding request failed (HTTP {exc.code}).") from exc
+            except URLError as exc:
+                raise EmbeddingError(f"Ollama embedding service is unavailable: {exc.reason}.") from exc
+            except TimeoutError as exc:
+                raise EmbeddingError("Ollama embedding request timed out.") from exc
             except Exception as exc:
                 raise EmbeddingError("Ollama embedding request failed.") from exc
             batch = payload.get("embeddings") if isinstance(payload, dict) else None
@@ -238,6 +248,12 @@ class MemoryService:
         self.vector_store = vector_store or QdrantLocalStore(
             root / "qdrant", dimensions=int(os.getenv("UBUNTU_AGENT_EMBEDDING_DIMENSIONS", "768")))
         self.max_document_bytes = max_document_bytes
+
+    def check_embedding_available(self) -> list[float]:
+        return self._embed(["LARA local memory readiness check"])[0]
+
+    def check_vector_store_available(self, vector: list[float]) -> None:
+        self._search_vectors(vector, ["operations"], 1)
 
     def _embed(self, texts):
         try:
@@ -759,4 +775,3 @@ class MemoryService:
         return {"text": row["text_content"], "title": row["display_name"], "source_id": row["source_id"],
                 "document_id": row["document_id"], "version": row["version"], "chunk_id": row["id"],
                 "source_ref": row["canonical_ref"], "location": location}
-

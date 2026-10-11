@@ -11,22 +11,23 @@ VALID_EXTERNAL_POLICIES = {"local_only", "local_then_ask", "local_then_cloud"}
 
 def _project_env_value(name: str) -> str | None:
     """Read one value from the project .env without logging or exporting it."""
-    path = Path(__file__).resolve().parent.parent / ".env"
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("export "):
-            stripped = stripped[7:].lstrip()
-        key, separator, value = stripped.partition("=")
-        if not separator or key.strip() != name:
+    backend_dir = Path(__file__).resolve().parent.parent
+    for path in (backend_dir.parent / ".env", backend_dir / ".env"):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
             continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        return value.strip() or None
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("export "):
+                stripped = stripped[7:].lstrip()
+            key, separator, value = stripped.partition("=")
+            if not separator or key.strip() != name:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            return value.strip() or None
     return None
 
 

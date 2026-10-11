@@ -14,7 +14,7 @@ from ubuntu_agent.cli import main
 from ubuntu_agent.database import Database
 from ubuntu_agent.loop.orchestrator import LoopOrchestrator
 from ubuntu_agent.loop.role_protocol import ROLE_SCHEMAS
-from ubuntu_agent.memory import MemoryService
+from ubuntu_agent.memory import EmbeddingError, MemoryService
 from ubuntu_agent.models import Actor
 from ubuntu_agent.providers import GenerationResult
 
@@ -72,6 +72,12 @@ class FakeConversationMemory:
 
     def search_memory(self, query, purpose, actor, **kwargs):
         return list(self.hits)
+
+    def check_embedding_available(self):
+        return [0.0, 1.0, 2.0]
+
+    def check_vector_store_available(self, vector):
+        return None
 
     def ingest_document(self, path, actor, room_id):
         self.indexed.append((str(path), room_id))
@@ -155,7 +161,20 @@ class TestApiContract(unittest.TestCase):
         self.assertEqual(200, ready.status_code)
         self.assertEqual("ready", ready.json()["database"])
         self.assertEqual("model_missing", ready.json()["local_model"]["status"])
-        self.assertEqual("not_initialized", ready.json()["vector_store"]["status"])
+        self.assertEqual("ready", ready.json()["memory"]["status"])
+        self.assertEqual("ready", ready.json()["vector_store"]["status"])
+
+    def test_readiness_reports_the_local_embedding_failure_reason(self):
+        def fail_embedding():
+            raise EmbeddingError("Ollama embedding model 'embeddinggemma' is unavailable (HTTP 404).")
+
+        self.memory.check_embedding_available = fail_embedding
+        ready = self.client.get("/api/v1/ready")
+        self.assertEqual("degraded", ready.json()["memory"]["status"])
+        self.assertEqual(
+            "Ollama embedding model 'embeddinggemma' is unavailable (HTTP 404).",
+            ready.json()["memory"]["reason"],
+        )
 
     def test_conversation_persists_user_and_assistant_turns(self):
         created = self.client.post("/api/v1/conversations", json={}, headers={"Origin": ORIGIN})
@@ -189,6 +208,36 @@ class TestApiContract(unittest.TestCase):
         disabled = self.client.patch(f"/api/v1/conversations/{conversation_id}", json={"memory_enabled":False}, headers={"Origin":ORIGIN})
         self.assertEqual(False, disabled.json()["memory_enabled"])
         self.assertEqual([], self.memory.deleted)
+
+    def test_conversation_memory_setting_is_returned_and_persists(self):
+        conversation_id = self.client.post("/api/v1/conversations", json={}, headers={"Origin": ORIGIN}).json()["id"]
+        listed = self.client.get("/api/v1/conversations", headers={"Origin": ORIGIN})
+        item = next(row for row in listed.json() if row["id"] == conversation_id)
+        self.assertIs(item["memory_enabled"], True)
+
+        updated = self.client.patch(
+            f"/api/v1/conversations/{conversation_id}", json={"memory_enabled": False}, headers={"Origin": ORIGIN}
+        )
+        self.assertEqual(False, updated.json()["memory_enabled"])
+        listed_again = self.client.get("/api/v1/conversations", headers={"Origin": ORIGIN})
+        item_again = next(row for row in listed_again.json() if row["id"] == conversation_id)
+        self.assertIs(item_again["memory_enabled"], False)
+
+    def test_explicit_memory_exclusion_keeps_chat_history_but_skips_indexing(self):
+        conversation_id = self.client.post("/api/v1/conversations", json={}, headers={"Origin": ORIGIN}).json()["id"]
+        response = self.client.post(
+            f"/api/v1/conversations/{conversation_id}/messages",
+            json={"content": "Exclude from long-term memory: the Aurora project is confidential."},
+            headers={"Origin": ORIGIN},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual("excluded", response.json()["memory_status"])
+        self.assertEqual([], self.memory.indexed)
+        messages = self.client.get(
+            f"/api/v1/conversations/{conversation_id}/messages", headers={"Origin": ORIGIN}
+        ).json()
+        self.assertEqual(2, len(messages))
+        self.assertTrue(all(message["memory_status"] == "excluded" for message in messages))
 
     def test_excluding_a_memory_invalidates_indexed_answers_derived_from_it(self):
         vectors = TinyVectorStore()
@@ -470,6 +519,104 @@ class TestApiContract(unittest.TestCase):
             headers={"Origin": ORIGIN},
         )
         self.assertEqual("snoozed", snoozed.json()["status"])
+
+    def test_task_preflight_allows_idempotency_key_without_replacing_json_content_type(self):
+        response = self.client.options(
+            "/api/v1/tasks",
+            headers={
+                "Origin": ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,idempotency-key",
+            },
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        allowed_headers = response.headers["access-control-allow-headers"].lower()
+        self.assertIn("content-type", allowed_headers)
+        self.assertIn("idempotency-key", allowed_headers)
+
+    def test_sticky_task_fields_round_trip_and_idempotent_retries(self):
+        headers = {"Origin": ORIGIN, "Idempotency-Key": "sticky-note-retry"}
+        sticky_payload = {
+            "title": "Sticky task",
+            "category": "Personal / Admin",
+            "room_id": "operations",
+            "is_sticky": True,
+            "sticky_color": "beige",
+        }
+        first = self.client.post("/api/v1/tasks", json=sticky_payload, headers=headers)
+        repeated = self.client.post("/api/v1/tasks", json=sticky_payload, headers=headers)
+        self.assertEqual(201, first.status_code, first.text)
+        self.assertEqual(first.json()["id"], repeated.json()["id"])
+        self.assertTrue(first.json()["is_sticky"])
+        self.assertEqual("beige", first.json()["sticky_color"])
+
+        regular = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "Regular task", "category": "Personal / Admin", "room_id": "operations"},
+            headers={"Origin": ORIGIN, "Idempotency-Key": "regular-task-once"},
+        )
+        self.assertEqual(201, regular.status_code, regular.text)
+        self.assertFalse(regular.json()["is_sticky"])
+        self.assertIsNone(regular.json()["sticky_color"])
+
+        task_id = first.json()["id"]
+        updated = self.client.patch(
+            f"/api/v1/tasks/{task_id}", json={"title": "Edited sticky task"}, headers={"Origin": ORIGIN}
+        )
+        self.assertEqual(200, updated.status_code, updated.text)
+        self.assertEqual("Edited sticky task", updated.json()["title"])
+        self.assertTrue(updated.json()["is_sticky"])
+        self.assertEqual("beige", updated.json()["sticky_color"])
+        listed = self.client.get("/api/v1/tasks?limit=100", headers={"Origin": ORIGIN}).json()["items"]
+        self.assertIn(task_id, {item["id"] for item in listed})
+
+    def test_room_specific_task_can_be_edited_after_creation(self):
+        created = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "Study task", "category": "Academics", "room_id": "academic"},
+            headers={"Origin": ORIGIN, "Idempotency-Key": "academic-task-once"},
+        )
+        self.assertEqual(201, created.status_code, created.text)
+        task_id = created.json()["id"]
+        fetched = self.client.get(f"/api/v1/tasks/{task_id}", headers={"Origin": ORIGIN})
+        self.assertEqual(200, fetched.status_code, fetched.text)
+        self.assertEqual(task_id, fetched.json()["id"])
+        updated = self.client.patch(
+            f"/api/v1/tasks/{task_id}",
+            json={"title": "Edited study task"},
+            headers={"Origin": ORIGIN},
+        )
+        self.assertEqual(200, updated.status_code, updated.text)
+        self.assertEqual("Edited study task", updated.json()["title"])
+        transitioned = self.client.post(
+            f"/api/v1/tasks/{task_id}/transitions",
+            json={"target_status": "next"},
+            headers={"Origin": ORIGIN},
+        )
+        self.assertEqual(200, transitioned.status_code, transitioned.text)
+        self.assertEqual("next", transitioned.json()["status"])
+        listed = self.client.get("/api/v1/tasks?limit=100", headers={"Origin": ORIGIN}).json()["items"]
+        self.assertIn(task_id, {item["id"] for item in listed})
+
+    def test_task_writes_use_narrow_room_grants(self):
+        opportunities = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "Opportunity task", "category": "Opportunities", "room_id": "opportunities"},
+            headers={"Origin": ORIGIN, "Idempotency-Key": "opportunity-task-once"},
+        )
+        self.assertEqual(201, opportunities.status_code, opportunities.text)
+
+        research = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "Research task", "category": "AI/ML Research", "room_id": "public_research"},
+            headers={"Origin": ORIGIN, "Idempotency-Key": "public-research-task-once"},
+        )
+        self.assertEqual(201, research.status_code, research.text)
+        self.assertEqual("ai_ml_researcher", research.json()["persona_owner"])
+        fetched = self.client.get(
+            f"/api/v1/tasks/{research.json()['id']}", headers={"Origin": ORIGIN}
+        )
+        self.assertEqual(200, fetched.status_code, fetched.text)
 
     def test_request_validation_is_structured_and_clients_cannot_assert_identity(self):
         response = self.client.post(

@@ -43,6 +43,8 @@ def parser() -> argparse.ArgumentParser:
                       help="Explicitly allow demo records in staging or production environments")
     seed.add_argument("--allow-production", action="store_true",
                       help="Additional explicit opt-in required when environment is production")
+    seed.add_argument("--index-knowledge", action="store_true",
+                      help="Index synthetic notes with configured local embeddings and Qdrant")
     commands.add_parser("demo-status", help="Show counts for marked LARA IV demo records")
     create = commands.add_parser("task-create", help="Create a typed task from JSON fields")
     create.add_argument("title")
@@ -193,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
                     environment=args.environment,
                     allow_non_development=args.allow_non_development,
                     allow_production=args.allow_production,
+                    index_knowledge=args.index_knowledge,
                 )
             else:
                 result = inspect_demo(db)

@@ -379,6 +379,10 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     ALTER TABLE local_api_sessions ADD COLUMN pairing_expires_at TEXT;
     UPDATE local_api_sessions SET pairing_expires_at=created_at;
     """),
+    (13, """
+    ALTER TABLE tasks ADD COLUMN is_sticky INTEGER NOT NULL DEFAULT 0 CHECK(is_sticky IN (0,1));
+    ALTER TABLE tasks ADD COLUMN sticky_color TEXT CHECK(sticky_color IS NULL OR sticky_color IN ('beige','white','ash'));
+    """),
 )
 
 

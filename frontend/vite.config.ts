@@ -1,5 +1,8 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv, type UserConfig } from 'vite'
+import { fileURLToPath } from 'node:url'
+
+const repositoryRoot = fileURLToPath(new URL('..', import.meta.url))
 
 function configuredPublicOrigin(raw: string | undefined): URL {
   const value = raw || 'http://localhost:5173'
@@ -16,7 +19,7 @@ function configuredPublicOrigin(raw: string | undefined): URL {
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
+  const env = loadEnv(mode, repositoryRoot, '')
   const localDemo = (process.env.LARA_LOCAL_DEMO || env.LARA_LOCAL_DEMO || '0') === '1'
   if ((process.env.LARA_LOCAL_DEMO || env.LARA_LOCAL_DEMO || '0') !== '0' &&
       (process.env.LARA_LOCAL_DEMO || env.LARA_LOCAL_DEMO) !== '1') {
@@ -25,6 +28,11 @@ export default defineConfig(({ mode }) => {
   const publicOrigin = localDemo
     ? configuredPublicOrigin(process.env.LARA_PUBLIC_ORIGIN || env.LARA_PUBLIC_ORIGIN || 'http://127.0.0.1:5173')
     : configuredPublicOrigin(process.env.LARA_PUBLIC_ORIGIN || env.LARA_PUBLIC_ORIGIN)
+  const rawApiPort = process.env.LARA_API_PORT || env.LARA_API_PORT || '8765'
+  if (!/^\d{1,5}$/.test(rawApiPort) || Number(rawApiPort) < 1 || Number(rawApiPort) > 65535) {
+    throw new Error('LARA_API_PORT must be a port between 1 and 65535.')
+  }
+  const apiPort = Number(rawApiPort)
   if (localDemo && (publicOrigin.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(publicOrigin.hostname))) {
     throw new Error('LARA_LOCAL_DEMO requires a loopback HTTP frontend origin.')
   }
@@ -34,7 +42,7 @@ export default defineConfig(({ mode }) => {
     allowedHosts: [...new Set(['localhost', '127.0.0.1', publicHost])],
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8765',
+        target: `http://127.0.0.1:${apiPort}`,
         // Rewrite only the upstream Host header. Browser Origin stays intact for backend checks.
         changeOrigin: true,
         configure: (proxy) => {

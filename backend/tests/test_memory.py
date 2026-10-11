@@ -3,8 +3,10 @@ import contextlib
 import io
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 from pathlib import Path
+from urllib.request import Request
 
 from ubuntu_agent.database import Database
 from ubuntu_agent.memory import (EmbeddingAdapter, EmbeddingError, MemoryService,
@@ -76,6 +78,12 @@ class MemoryTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_readiness_probe_checks_embedding_and_vector_search_without_writes(self):
+        vector = self.memory.check_embedding_available()
+        self.memory.check_vector_store_available(vector)
+        self.assertEqual({}, self.vectors.items)
+        self.assertEqual(["LARA local memory readiness check"], self.embedder.inputs)
 
     def test_explicit_ingestion_has_stable_chunk_provenance_and_reopens(self):
         result = self.memory.ingest_document(self.file, self.manager, "operations")
@@ -335,6 +343,15 @@ class MemoryTests(unittest.TestCase):
             {"embeddings": [[0.0] * 767]}).encode())
         with self.assertRaisesRegex(EmbeddingError, "dimension does not match"):
             adapter.embed(["violet comet 742"])
+
+    def test_missing_ollama_embedding_model_reports_actual_http_reason(self):
+        def missing_model(req, timeout):
+            raise HTTPError(req.full_url, 404, "not found", None, None)
+
+        adapter = EmbeddingAdapter(transport=missing_model)
+        with self.assertRaisesRegex(EmbeddingError, "embeddinggemma.*HTTP 404") as raised:
+            adapter.embed(["violet comet 742"])
+        raised.exception.__cause__.close()
 
 
 if __name__ == "__main__":

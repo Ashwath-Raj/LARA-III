@@ -15,6 +15,8 @@ export const QuickCaptureModal: React.FC<QuickCaptureModalProps> = ({ isOpen, on
   const [inputVal, setInputVal] = useState('');
   const [candidate, setCandidate] = useState<TaskCaptureCandidate | null>(null);
   const [isParsing, setIsParsing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   // Form override fields
   const [title, setTitle] = useState('');
@@ -50,23 +52,30 @@ export const QuickCaptureModal: React.FC<QuickCaptureModalProps> = ({ isOpen, on
   };
 
   const handleSave = async () => {
-    if (!title.trim()) return;
-    await createTask({
-      title,
-      description: inputVal,
-      category,
-      room,
-      priority: 'high',
-      dueDate: dueDate || undefined,
-      course: course || undefined,
-      isSticky,
-      stickyColor: 'beige',
-      nextAction: 'Review captured task and schedule initial work session.',
-    });
-    // Reset
-    setInputVal('');
-    setCandidate(null);
-    onClose();
+    if (!title.trim() || isSaving) return;
+    setIsSaving(true);
+    setSaveError('');
+    try {
+      await createTask({
+        title,
+        description: inputVal,
+        category,
+        room,
+        priority: 'high',
+        dueDate: dueDate || undefined,
+        course: course || undefined,
+        isSticky,
+        stickyColor: isSticky ? 'beige' : undefined,
+        nextAction: 'Review captured task and schedule initial work session.',
+      });
+      setInputVal('');
+      setCandidate(null);
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? `Task was not saved: ${error.message}` : 'Task was not saved. Try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -384,6 +393,7 @@ export const QuickCaptureModal: React.FC<QuickCaptureModalProps> = ({ isOpen, on
               </div>
             </div>
           )}
+          {saveError && <p role="alert" style={{ color: 'var(--status-error)', fontSize: '12px' }}>{saveError}</p>}
         </div>
 
         {/* Modal Footer */}
@@ -406,11 +416,11 @@ export const QuickCaptureModal: React.FC<QuickCaptureModalProps> = ({ isOpen, on
             </button>
             <button
               onClick={handleSave}
-              disabled={!title.trim() && !inputVal.trim()}
+              disabled={isSaving || !title.trim()}
               className="u-btn u-btn-primary"
             >
               <Check size={14} />
-              Confirm & Create Task
+              {isSaving ? 'Saving…' : 'Confirm & Create Task'}
             </button>
           </div>
         </div>

@@ -14,6 +14,8 @@ import {
   SettingsState,
   Project,
   ConversationMessage,
+  ConversationSummary,
+  MemoryReadiness,
   AILoopMessage,
   AILoopRole,
 } from '../types';
@@ -42,7 +44,7 @@ import {
   INITIAL_AI_LOOPS,
   createDefaultAILoopParticipants,
 } from '../data/mockData';
-import { ConversationSummary, AILoopSession } from '../types';
+import { AILoopSession } from '../types';
 import { CreateAILoopPayload, PostLoopMessagePayload } from './types';
 
 const STORAGE_KEYS = {
@@ -896,6 +898,10 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
 
 
   // Conversation & Workbench
+  async getMemoryReadiness(): Promise<MemoryReadiness> {
+    return { status: 'unavailable', reason: 'Long-term memory requires the local backend; browser demo history is separate.' };
+  }
+
   async listMessages(conversationId = this.activeConversationId): Promise<ConversationMessage[]> {
     return this.messages.filter((message) => message.conversationId === conversationId).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
@@ -912,6 +918,7 @@ export class MockUbuntuAgentApi implements UbuntuAgentApiAdapter {
         updatedAt: latest.timestamp,
         preview: latest.content.replace(/\s+/g, ' ').slice(0, 100),
         messageCount: messages.length,
+        memoryEnabled: this.conversationMemory[id] ?? false,
       };
     }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }

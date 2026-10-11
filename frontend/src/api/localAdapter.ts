@@ -1,12 +1,17 @@
 import { UbuntuAgentApiAdapter, GraphData, CalendarEventRecord } from './adapter';
-import { Task, Reminder, AILoopSession, ConversationMessage, ConversationSummary, Project, ApprovalRequest, AgentJob, SettingsState, AuditEvent, KnowledgeGraphNode } from '../types';
+import { Task, Reminder, AILoopSession, ConversationMessage, ConversationSummary, MemoryReadiness, Project, ApprovalRequest, AgentJob, SettingsState, AuditEvent, KnowledgeGraphNode } from '../types';
 import { TaskFilterParams, CreateTaskPayload, UpdateTaskPayload, CreateAILoopPayload, PostLoopMessagePayload } from './types';
 
 const PREFIX = '/api/v1';
 declare const __LARA_LOCAL_DEMO__: boolean;
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${PREFIX}${path}`, { credentials: __LARA_LOCAL_DEMO__ ? 'omit' : 'same-origin', ...init,
-    headers: { 'Content-Type': 'application/json', ...init.headers } });
+  const headers = new Headers(init.headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`${PREFIX}${path}`, {
+    credentials: __LARA_LOCAL_DEMO__ ? 'omit' : 'same-origin',
+    ...init,
+    headers,
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error(body?.error?.message || `Local API request failed (${response.status}).`);
@@ -18,12 +23,18 @@ const json = (method: string, body?: unknown): RequestInit => ({ method, ...(bod
 const statusMap: Record<string, Task['status']> = { inbox: 'inbox', next: 'next', in_progress: 'in_progress', waiting: 'waiting', review: 'review', ready_to_submit: 'ready_to_submit', done: 'done', archived: 'archived' };
 const categoryToBackend: Record<string,string> = { 'Hackathons':'Hackathons & Competitions','AI/ML':'AI/ML Research','Robotics':'Robotics','Quantum':'Quantum Computing','Personal/Admin':'Personal / Admin' };
 const categoryToUi: Record<string,Task['category']> = { 'Hackathons & Competitions':'Hackathons','AI/ML Research':'AI/ML','Quantum Computing':'Quantum','Personal / Admin':'Personal/Admin','Waiting / Follow-up':'Personal/Admin' };
+function localTimezone(): string {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return timezone === 'Asia/Calcutta' ? 'Asia/Kolkata' : timezone;
+}
 function task(row: any): Task {
   return { id: row.id, title: row.title, description: row.description || '', status: statusMap[row.status] || 'inbox',
     priority: row.priority === 'urgent' ? 'high' : row.priority === 'normal' ? 'medium' : row.priority,
     category: categoryToUi[row.category] || row.category as Task['category'], room: row.room_id, dueDate: row.due_date || undefined,
     dueTime: row.due_at ? new Date(row.due_at).toTimeString().slice(0, 5) : undefined,
-    createdAt: row.created_at, updatedAt: row.updated_at, project:row.project_id || undefined, attachments: [], remindersCount: 0, tags: [] };
+    createdAt: row.created_at, updatedAt: row.updated_at, project:row.project_id || undefined,
+    isSticky: Boolean(row.is_sticky), stickyColor: row.sticky_color || undefined,
+    attachments: [], remindersCount: 0, tags: [] };
 }
 function reminder(row: any): Reminder {
   return { id: row.id, taskId: row.task_id, taskTitle: row.task_title, title: row.message,
@@ -41,13 +52,14 @@ const graphNodeTypes: Record<string, KnowledgeGraphNode['nodeType']> = {
   conclusion:'conclusion',external_response:'claim',
 };
 function loop(row: any, graph: any = {nodes:[],edges:[]}): AILoopSession {
+  const isSyntheticDemo = row.provider_mode === 'demo_seed' || String(row.goal || '').startsWith('Synthetic demo discussion') || String(row.goal || '').startsWith('[DEMO LARA IV v1]');
   const roles = row.roles || [];
   const participants = Object.fromEntries((['blue_team','red_team','judge','unbiased_reviewer'] as const).map((name) => {
     const role = roles.find((item: any) => item.role_name === name);
     const uiRole = roleNames[name];
     return [uiRole, { role: uiRole, name: role?.role_label || name, title: role?.role_label || name,
-      description: 'Local model role', configuredPrompt: '', constraints: [], providerModel: role?.executions?.at(-1)?.model_id || 'Ollama',
-      isSimulated: false, activityState: role?.status === 'running' ? 'thinking' : 'idle',
+      description: isSyntheticDemo ? 'Synthetic example; this role did not run a model.' : 'Local model role', configuredPrompt: '', constraints: [], providerModel: isSyntheticDemo ? 'Synthetic demo output' : role?.executions?.at(-1)?.model_id || 'Ollama',
+      isSimulated: isSyntheticDemo, activityState: role?.status === 'running' ? 'thinking' : 'idle',
       executionStatus: role?.status || 'pending', errorClass:role?.executions?.at(-1)?.error_class || undefined }];
   })) as unknown as AILoopSession['participants'];
   const messages = (row.rounds || []).filter((r: any) => r.status === 'succeeded' && r.role_name).map((r: any) => {
@@ -56,7 +68,7 @@ function loop(row: any, graph: any = {nodes:[],edges:[]}): AILoopSession {
     const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
     return { id: r.id, loopId: row.id, roundNumber: r.round_index, role, timestamp: r.updated_at,
       contributionType: role === 'blue_team' ? 'proposal' : role === 'red_team' ? 'critique' : role === 'reviewer' ? 'review_finding' : 'judge_decision',
-      content: text, simulated: false };
+      content: text, simulated: isSyntheticDemo };
   });
   const state = row.execution?.status || row.status;
   const status: AILoopSession['status'] = state === 'succeeded' ? 'Synthesized' : state === 'review_required' ? 'Awaiting User'
@@ -102,17 +114,42 @@ function loop(row: any, graph: any = {nodes:[],edges:[]}): AILoopSession {
   return { id: row.id, name: row.goal.slice(0, 120), objective: row.goal, constraints: row.constraints || [], status,
     roundCount: (row.rounds || []).length, currentRound: Math.max(1, row.execution?.current_round || 1),
     createdAt: row.created_at, updatedAt: row.updated_at, participants, messages, desktopContext: emptyDesktop,
-    graphNodes, graphEdges, synthesis, isSimulated: false };
+    graphNodes, graphEdges, synthesis, isSimulated: isSyntheticDemo };
 }
 
 export class LocalUbuntuAgentApi implements UbuntuAgentApiAdapter {
   private activeConversationId = '';
+  private readonly pendingTaskIdempotencyKeys = new Map<string, string>();
   async connect(pairingToken: string) { return request('/auth/session', json('POST', { pairing_token: pairingToken })); }
   async session() { return request<{ authenticated: boolean }>('/auth/session'); }
   async health() { return request<any>('/health'); }
-  async readiness() { return request<any>('/ready'); }
+  async readiness(): Promise<{ memory?: MemoryReadiness }> { return request('/ready'); }
+  async getMemoryReadiness(): Promise<MemoryReadiness> {
+    const readiness = await this.readiness();
+    return readiness.memory || { status: 'unavailable', reason: 'The backend did not report long-term memory status.' };
+  }
   async captureTask(inputText: string) { return { rawText: inputText, suggestedTitle: inputText.slice(0, 300), missingFields: [], clarificationQuestions: [], requiresConfirmation: true }; }
-  async createTask(p: CreateTaskPayload) { return task(await request('/tasks', json('POST', { title:p.title, description:p.description || '', category:categoryToBackend[p.category] || p.category, room_id:p.room, priority:p.priority === 'medium' ? 'normal' : p.priority, project_id:p.project || null, due_date:p.dueDate || null, due_at:p.dueDate && p.dueTime ? new Date(`${p.dueDate}T${p.dueTime}`).toISOString() : null, timezone:Intl.DateTimeFormat().resolvedOptions().timeZone }))); }
+  async createTask(p: CreateTaskPayload) {
+    const payload = {
+      title:p.title, description:p.description || '', category:categoryToBackend[p.category] || p.category,
+      room_id:p.room, priority:p.priority === 'medium' ? 'normal' : p.priority, project_id:p.project || null,
+      due_date:p.dueDate || null, due_at:p.dueDate && p.dueTime ? new Date(`${p.dueDate}T${p.dueTime}`).toISOString() : null,
+      timezone:localTimezone(), is_sticky:Boolean(p.isSticky),
+      sticky_color:p.isSticky ? p.stickyColor || 'beige' : null,
+    };
+    const requestIdentity = JSON.stringify(payload);
+    let idempotencyKey = this.pendingTaskIdempotencyKeys.get(requestIdentity);
+    if (!idempotencyKey) {
+      idempotencyKey = crypto.randomUUID();
+      this.pendingTaskIdempotencyKeys.set(requestIdentity, idempotencyKey);
+    }
+    const response = await request('/tasks', {
+      ...json('POST', payload),
+      headers: { 'Idempotency-Key': idempotencyKey },
+    });
+    this.pendingTaskIdempotencyKeys.delete(requestIdentity);
+    return task(response);
+  }
   async listTasks(filters?: TaskFilterParams) { const data = await request<any>(`/tasks?limit=100${filters?.status ? `&status=${filters.status}` : ''}`); return data.items.map(task); }
   async getTask(id: string) { try { return task(await request(`/tasks/${id}`)); } catch { return null; } }
   async updateTask(id: string, p: UpdateTaskPayload) { const patch: any = {}; if(p.title!==undefined)patch.title=p.title; if(p.description!==undefined)patch.description=p.description; if(p.priority!==undefined)patch.priority=p.priority==='medium'?'normal':p.priority; if(p.category!==undefined)patch.category=categoryToBackend[p.category]||p.category; if(p.project!==undefined)patch.project_id=p.project||null; if(p.dueDate!==undefined){patch.due_date=p.dueDate||null;patch.due_at=p.dueDate&&p.dueTime?new Date(`${p.dueDate}T${p.dueTime}`).toISOString():null;} return task(await request(`/tasks/${id}`,json('PATCH',patch))); }
@@ -158,10 +195,10 @@ export class LocalUbuntuAgentApi implements UbuntuAgentApiAdapter {
     if (!conversationId) return [];
     const rows = await request<any[]>(`/conversations/${conversationId}/messages`);
     return rows.map((row) => ({ id:row.id, conversationId:row.conversation_id, sender:row.sender === 'assistant' ? 'agent' : 'user', content:row.content,
-      timestamp:row.created_at, roomId:'operations', route:'Local only', simulated:false, memoryStatus:row.memory_status,
+      timestamp:row.created_at, roomId:'operations', route:'Local only', simulated:row.provider_id === 'demo_seed' || row.model_id === 'synthetic', memoryStatus:row.memory_status,
       retrievedMemories:row.retrieved_memories || [] } as ConversationMessage));
   }
-  async listConversations(): Promise<ConversationSummary[]> { return (await request<any[]>('/conversations')).map(row=>({id:row.id,title:row.title,updatedAt:row.updated_at,preview:row.preview||'',messageCount:row.message_count,memoryEnabled:!!row.memory_enabled})); }
+  async listConversations(): Promise<ConversationSummary[]> { return (await request<any[]>('/conversations')).map(row=>({id:row.id,title:row.title,updatedAt:row.updated_at,preview:row.preview||'',messageCount:row.message_count,memoryEnabled:row.memory_enabled === true || row.memory_enabled === 1})); }
   async createConversation(): Promise<string> { const result=await request<any>('/conversations',json('POST',{})); this.activeConversationId=result.id; return result.id; }
   async selectConversation(id: string): Promise<void> { this.activeConversationId=id; }
   async renameConversation(id: string,title: string): Promise<void> { await request(`/conversations/${id}`,json('PATCH',{title})); }

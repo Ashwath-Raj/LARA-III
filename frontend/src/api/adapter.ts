@@ -16,6 +16,7 @@ import {
   KnowledgeGraphEdge,
   ConversationMessage,
   ConversationSummary,
+  MemoryReadiness,
   AILoopSession,
   KnowledgeRoom,
 } from '../types';
@@ -79,6 +80,7 @@ export interface UbuntuAgentApiAdapter {
   postLoopMessage(loopId: string, payload: PostLoopMessagePayload): Promise<AILoopSession>;
 
   // Conversation & Workbench
+  getMemoryReadiness(): Promise<MemoryReadiness>;
   listMessages(conversationId?: string): Promise<ConversationMessage[]>;
   listConversations(): Promise<ConversationSummary[]>;
   createConversation(): Promise<string>;
