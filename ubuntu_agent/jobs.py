@@ -182,6 +182,13 @@ def validate_payload(job_type: str, payload: object) -> None:
                 or not isinstance(payload["arguments"], dict)):
             raise JobValidationError("Autonomy action payload is malformed.")
         return
+    if job_type == "loop.round":
+        if (set(payload) != {"loop_id", "round_index", "stage"}
+                or not isinstance(payload["loop_id"], str) or not payload["loop_id"]
+                or type(payload["round_index"]) is not int or payload["round_index"] < 1
+                or not isinstance(payload["stage"], str) or not payload["stage"]):
+            raise JobValidationError("Loop round payload is malformed.")
+        return
     raise JobValidationError("Job type is not registered.")
 
 

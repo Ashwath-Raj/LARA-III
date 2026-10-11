@@ -9,6 +9,7 @@ ACTION_RISK = {
     "task.read": RiskTier.READ,
     "task.update": RiskTier.PREPARE,
     "task.transition": RiskTier.PREPARE,
+    "task.delete": RiskTier.PREPARE,
     "reminder.create": RiskTier.PREPARE,
     "reminder.read": RiskTier.READ,
     "task.capture": RiskTier.PREPARE,
@@ -25,6 +26,7 @@ ACTION_RISK = {
     "loop.create": RiskTier.PREPARE,
     "loop.generate": RiskTier.PREPARE,
     "loop.ingest": RiskTier.PREPARE,
+    "conversation.generate": RiskTier.PREPARE,
     # These names are classified so attempted downgrades are rejected, but no
     # corresponding adapter is registered in this milestone.
     "classroom.submit": RiskTier.EXTERNAL,
@@ -34,10 +36,10 @@ ACTION_RISK = {
     "shell.execute": RiskTier.PRIVILEGED,
 }
 IMPLEMENTED_ACTIONS = {
-    "task.create", "task.read", "task.update", "task.transition", "reminder.create", "reminder.read",
+    "task.create", "task.read", "task.update", "task.transition", "task.delete", "reminder.create", "reminder.read",
     "task.capture", "provider.health_check", "memory.ingest", "memory.search", "memory.delete",
     "desktop.preflight", "desktop.workspace", "desktop.run", "desktop.action", "desktop.consequential",
-    "loop.read", "loop.create", "loop.generate", "loop.ingest",
+    "loop.read", "loop.create", "loop.generate", "loop.ingest", "conversation.generate",
 }
 OPERATOR_ACTIONS = {
     "desktop.preflight", "desktop.workspace", "desktop.run", "desktop.action", "desktop.consequential",

@@ -41,6 +41,17 @@ Use these tables as the first contract. Add fields only when a real workflow nee
 
 Recommended additional tables as needed: `reminder_rules`, `provider_connections` (without secret material), `notification_events`, `schema_migrations`, `task_events`, and `source_citations`.
 
+### AI Loop execution records (SQLite migration 7)
+
+- `loop_execution_state` is the authoritative lifecycle row for a loop. It stores `waiting`, `running`, `succeeded`, `failed`, `cancelled`, or `review_required`, the current role/invocation, pending role steps, total invocation count, reviewer verdict, final synthesis, sanitized failure class, and the worker lease.
+- Each `loop_rounds` row is one model invocation, not a debate-cycle summary. It records the role, stage, exact structured input JSON, structured output JSON, provider/model provenance, attempt count, status, and sanitized error class. Invocation IDs are stable UUIDv5 values derived from the parent loop ID and invocation sequence.
+- `loop_roles` summarizes the most recent state for each of the four roles. Its related invocation history and outputs remain in `loop_rounds`; the role row alone is never execution evidence.
+- `ai_loops.max_rounds` is a strict **total model-invocation budget**, including failed calls. A normal completed loop uses four invocations: Blue Team proposal, Red Team challenge, Judge synthesis, and Unbiased Reviewer audit. The current runner does not retry a failed model call.
+- If the Reviewer says `revise`, one bounded revision may add a Blue Team revision and a Judge re-synthesis. The Reviewer re-audits only if at least one further invocation remains. If the budget cannot complete and re-review that cycle, the final state is `review_required`, never `succeeded`.
+- A role result and the next pending plan are committed atomically. The runner releases its SQLite lease between role invocations, so a process restart resumes from completed records without repeating them. A stale lease with an active role is ambiguous: that invocation is marked failed with `interrupted_unknown_result`, and the loop becomes `review_required` instead of repeating a possibly completed call.
+- Loop prompts are operations-room data and this milestone routes them only to local Ollama. Evidence is included only from loop-scoped records explicitly marked ingested; with no such records, the Judge and final artifact expose that no grounded evidence was available. Model-generated reasoning is not a source citation.
+- The general `jobs` queue does not have a loop handler. Loop recovery is provided by the per-loop lease and persisted invocation state; no unconsumed queued job is created.
+
 ### Integrity and indexing
 
 - Add foreign keys and enable SQLite foreign-key enforcement.

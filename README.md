@@ -1,18 +1,33 @@
 # Ubuntu Agent — local core
 
-The local core provides versioned SQLite persistence, deterministic room/persona policy checks, and task/reminder services. Optional inference and RAG adapters do not become task-core dependencies.
+The local core provides versioned SQLite persistence, deterministic room/persona policy checks, and task/reminder services. The HTTP adapter is local-only; optional inference and RAG adapters remain replaceable.
 
 ## Initialize and run
 
-From the repository root, Python 3.11+ is sufficient:
+Install the package on Python 3.11+ from the repository root:
 
 ```sh
+python -m pip install -e .
 python -m ubuntu_agent init
 python -m ubuntu_agent task-create "Algorithms assignment" --category Academics --due-date 2027-11-07
 python -m ubuntu_agent tasks
 python -m ubuntu_agent reminder-create TASK_ID 2027-11-04T09:00:00Z "Start the assignment"
 python -m ubuntu_agent reminders
 ```
+
+## Disposable LARA IV demo data
+
+Demo seeding requires an explicit SQLite path. It initializes the normal schema, then adds deterministic, visibly tagged sample tasks, reminders, a cancelled synthetic AI-loop preview, and unavailable desktop-workspace metadata. It does not clear existing records, run inference, access the browser/desktop, dispatch notifications, or insert vectors into Qdrant.
+
+```sh
+mkdir -p /tmp/lara-iv-demo
+python -m ubuntu_agent --db /tmp/lara-iv-demo/ubuntu-agent.sqlite3 seed-demo --environment development
+python -m ubuntu_agent --db /tmp/lara-iv-demo/ubuntu-agent.sqlite3 demo-status
+```
+
+`demo-status` reports aggregate counts without printing record contents. Re-running `seed-demo` is idempotent and leaves already-seeded records, including later user edits to them, unchanged. To start over, choose a new disposable path (preferably from `mktemp -d`) rather than deleting or reusing a user's normal database. Staging requires `--allow-non-development`; production requires both `--allow-non-development` and `--allow-production`. A production environment reported through `APP_ENV`, `UBUNTU_AGENT_ENV`, or `ENVIRONMENT` cannot be seeded as development.
+
+The application schema includes persistent tasks, reminders, projects, calendar events, conversations, AI Loops, and the existing document-memory index. The demo seeder adds only its explicitly tagged sample records; it does not seed synthetic conversational memories because memory writes use the local ingestion pipeline.
 
 For a reminder that should move with a timed deadline, create the task with `--due-at` and create the reminder with `--reminder-type relative_to_due_at --offset-minutes 60` (the supplied `scheduled_at` must equal the deadline minus that offset). Deadline changes reschedule those rule-based reminders in the same transaction. A fixed-time reminder has no safe deadline rule, so a deadline change is rejected until that reminder is handled.
 
@@ -53,6 +68,45 @@ python -m ubuntu_agent task-preview "Algorithms assignment due 2027-11-07" --pro
 Task preview is non-persisting and always requires separate confirmation through `TaskCaptureService.confirm_and_create`, which delegates to the protected `TaskService`. It sends only the supplied text and a fixed extraction instruction, not task history or database contents. Hosted task extraction is currently denied even with `--cloud-opt-in`: the provider sensitivity thresholds are unresolved in the autonomy specification, so the policy cannot authorize disclosure from the Operations room. The generic health check uses a fixed non-sensitive prompt and is the only hosted request presently permitted.
 
 The provider adapter interface and local core support Python 3.11+. The optional `google-genai==2.25.0` manifest pin is compatible with Python 3.14 according to the SDK's published package metadata ([official SDK metadata](https://github.com/googleapis/python-genai/blob/main/pyproject.toml)).
+
+## Four-role local AI Loop
+
+The AI Loop executes Blue Team proposal, Red Team challenge, Judge synthesis, and Unbiased Reviewer audit as separate calls to the same local Ollama model. `--max-rounds` is the strict total inference-call budget (4-12), including revision calls. One bounded revision consists of Blue Team and Judge calls; the Reviewer re-audits only if a further invocation remains. `review_required` is terminal when the reviewer does not pass or the budget cannot complete the revision cycle.
+
+```sh
+python -m ubuntu_agent --db /tmp/lara-loop.sqlite3 loop-create "Assess a local recovery design" --max-rounds 7
+python -m ubuntu_agent --db /tmp/lara-loop.sqlite3 loop-run LOOP_ID --invocation-limit 2
+python -m ubuntu_agent --db /tmp/lara-loop.sqlite3 loop-show LOOP_ID
+python -m ubuntu_agent --db /tmp/lara-loop.sqlite3 loop-resume LOOP_ID
+python -m ubuntu_agent --db /tmp/lara-loop.sqlite3 loop-cancel LOOP_ID
+```
+
+`--invocation-limit` checkpoints after that many calls in the current process; it does not change the persisted total budget. A later `loop-resume` skips completed role invocations. Each call records its structured input/output and local provider/model. A stale active call is treated as having an unknown result and requires review; it is not repeated. Malformed output and provider errors fail the loop without a success-shaped fallback. The runner does not enqueue a `loop.round` job because the general worker has no loop handler. AI Loop task data is Operations-room content, so this path rejects hosted inference even if a cloud adapter is configured. No grounded sources are claimed when none were supplied.
+
+## Local REST API
+
+The versioned FastAPI adapter exposes health/readiness, AI Loop, task, reminder, project, calendar-event, conversation, memory-indexing, and audit operations through the existing services and SQLite tables. It binds to `127.0.0.1` only. A one-time pairing token is issued by the CLI, stored as a hash, and exchanged by a browser from an exact configured localhost origin for an HttpOnly, SameSite=Strict cookie. The pairing token cannot be reused after exchange; logout revokes the session. The default origin allowlist is `http://localhost:5173` and `http://127.0.0.1:5173`; override it with a comma-separated `UBUNTU_AGENT_API_ORIGINS` containing exact local origins with ports.
+
+```sh
+python -m ubuntu_agent --db /tmp/lara-api.sqlite3 api-session-create --origin http://localhost:5173
+python -m ubuntu_agent --db /tmp/lara-api.sqlite3 api-serve --port 8765
+```
+
+Exchange the displayed pairing token once with `POST http://localhost:8765/api/v1/auth/session`, a JSON body `{"pairing_token":"..."}`, and `Origin: http://localhost:5173`; the browser must accept cookies and send credentials on subsequent requests. API calls require that exact `Origin`. `/api/v1/health` is a data-free liveness endpoint; `/api/v1/ready` checks SQLite and probes only the configured local Ollama endpoint. OpenAPI is available at `/api/v1/openapi.json`.
+
+The companion `FossxHacktober-ui/frontend` now uses the authenticated local API through a Vite same-origin proxy. Tasks, reminders, AI Loop sessions, and conversations persist in SQLite. Chat calls the configured local Ollama model and persists the user turn before inference, so provider failures do not discard it. Loop runs are synchronous and the interface waits for the returned persisted state.
+
+Chats persist user and assistant turns. Eligible exchanges are automatically indexed through the existing local document memory service (EmbeddingGemma plus Qdrant), and later conversations can retrieve authorized excerpts with SQLite provenance. Index failures do not lose chat history and can be retried when the local index is available. Credentials are excluded from long-term indexing. Projects, task links, calendar events, and audit history persist locally. Approval execution, general agent jobs, and non-loop graph inspection remain unavailable and are labelled as such; loop graphs are backed by persisted loop records.
+
+### Run the integrated local application
+
+In one terminal, from the backend repository:
+
+```sh
+./scripts/start-lara-dev.sh
+```
+
+The script initializes the selected database without resetting it, issues a one-time pairing token for `http://localhost:5173`, starts the backend on loopback and starts Vite. Paste the printed token into the LARA IV connection form. Ollama must be running with the configured `OLLAMA_MODEL` for chat and AI Loop inference. For conversational memory, install `.[rag]` and pull `embeddinggemma`; without these, chat remains available and reports memory indexing as unavailable. Set `LARA_DB_PATH` to select a disposable database for development. Normal migrations create its schema; no demo records are seeded.
 
 ## Local memory (Phase 3)
 

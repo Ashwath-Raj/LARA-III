@@ -84,6 +84,7 @@ class ProviderTests(unittest.TestCase):
         url, body, timeout = seen[0]
         self.assertFalse(body["stream"])
         self.assertEqual({"type": "object"}, body["format"])
+        self.assertEqual({"temperature": 0}, body["options"])
         self.assertEqual(2, timeout)
         self.assertEqual("http://127.0.0.1:11434/api/generate", url)
 

@@ -633,6 +633,13 @@ class MemoryService:
                           WHERE c.id=?""", (chunk_id,)).fetchone()
                 if not row or row["room_id"] not in allowed:
                     continue
+                conversational_source = conn.execute("""SELECT s.status,c.deleted_at,c.memory_enabled
+                    FROM conversation_memory_sources s JOIN conversations c ON c.id=s.conversation_id
+                    WHERE s.document_id=? LIMIT 1""", (row["document_id"],)).fetchone()
+                if conversational_source and (conversational_source["status"] != "indexed" or
+                                               conversational_source["deleted_at"] is not None or
+                                               not conversational_source["memory_enabled"]):
+                    continue
                 if (row["document_room_id"] != row["room_id"] or
                         row["document_sensitivity"] != row["sensitivity_label"] or
                         row["sensitivity_label"] not in ("internal", "sensitive", "restricted", "public") or

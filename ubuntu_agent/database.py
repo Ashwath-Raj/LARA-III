@@ -236,6 +236,145 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
       created_at TEXT NOT NULL, expires_at TEXT NOT NULL
     );
     """),
+    (6, """
+    CREATE TABLE IF NOT EXISTS loop_roles (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      role_name TEXT NOT NULL CHECK(role_name IN ('red_team','blue_team','judge','unbiased_reviewer')),
+      role_label TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','active','complete','cancelled')),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE(loop_id, role_name)
+    );
+    """),
+    (7, """
+    ALTER TABLE loop_rounds ADD COLUMN role_name TEXT;
+    ALTER TABLE loop_rounds ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE loop_rounds ADD COLUMN provider_id TEXT;
+    ALTER TABLE loop_rounds ADD COLUMN model_id TEXT;
+    ALTER TABLE loop_rounds ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0);
+    ALTER TABLE loop_rounds ADD COLUMN error_class TEXT;
+
+    CREATE TABLE loop_execution_state (
+      loop_id TEXT PRIMARY KEY REFERENCES ai_loops(id) ON DELETE CASCADE,
+      status TEXT NOT NULL CHECK(status IN
+        ('waiting','running','succeeded','failed','cancelled','review_required')),
+      current_role TEXT,
+      current_round INTEGER,
+      pending_json TEXT NOT NULL,
+      invocation_count INTEGER NOT NULL DEFAULT 0 CHECK(invocation_count >= 0),
+      review_verdict TEXT CHECK(review_verdict IN ('pass','revise','insufficient_evidence')),
+      final_synthesis TEXT,
+      error_class TEXT,
+      worker_id TEXT,
+      lease_expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK ((status='running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR status!='running')
+    );
+    CREATE INDEX loop_execution_lease ON loop_execution_state(status, lease_expires_at);
+
+    CREATE TABLE loop_roles_v7 (
+      id TEXT PRIMARY KEY, loop_id TEXT NOT NULL REFERENCES ai_loops(id) ON DELETE CASCADE,
+      role_name TEXT NOT NULL CHECK(role_name IN ('red_team','blue_team','judge','unbiased_reviewer')),
+      role_label TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','failed','cancelled')),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE(loop_id, role_name)
+    );
+    INSERT INTO loop_roles_v7(id,loop_id,role_name,role_label,status,created_at,updated_at)
+      SELECT id,loop_id,role_name,role_label,
+        CASE status WHEN 'complete' THEN 'succeeded' WHEN 'active' THEN 'pending' ELSE status END,
+        created_at,updated_at FROM loop_roles;
+    DROP TABLE loop_roles;
+    ALTER TABLE loop_roles_v7 RENAME TO loop_roles;
+
+    INSERT INTO loop_execution_state
+      (loop_id,status,current_role,current_round,pending_json,invocation_count,review_verdict,
+       final_synthesis,error_class,worker_id,lease_expires_at,created_at,updated_at)
+      SELECT l.id,
+        CASE
+          WHEN l.status='cancelled' THEN 'cancelled'
+          WHEN l.status='failed' THEN 'failed'
+          WHEN l.status='created' AND NOT EXISTS
+            (SELECT 1 FROM loop_rounds r WHERE r.loop_id=l.id) THEN 'waiting'
+          ELSE 'review_required'
+        END,
+        NULL,NULL,
+        CASE
+          WHEN l.status='created' AND NOT EXISTS
+            (SELECT 1 FROM loop_rounds r WHERE r.loop_id=l.id)
+          THEN '[{\"role\":\"blue_team\",\"stage\":\"propose\"},{\"role\":\"red_team\",\"stage\":\"challenge\"},{\"role\":\"judge\",\"stage\":\"synthesize\"},{\"role\":\"unbiased_reviewer\",\"stage\":\"audit\"}]'
+          ELSE '[]'
+        END,
+        0,NULL,NULL,
+        CASE
+          WHEN l.status='created' AND NOT EXISTS
+            (SELECT 1 FROM loop_rounds r WHERE r.loop_id=l.id) THEN NULL
+          WHEN l.status IN ('cancelled','failed') THEN 'legacy_terminal_state'
+          ELSE 'legacy_execution_not_resumable'
+        END,
+        NULL,NULL,l.created_at,l.updated_at
+      FROM ai_loops l;
+    UPDATE loop_execution_state SET status='review_required',pending_json='[]',
+      error_class='legacy_budget_below_minimum'
+      WHERE status='waiting' AND loop_id IN (SELECT id FROM ai_loops WHERE max_rounds < 4);
+    """),
+    (8, """
+    CREATE TABLE conversations (
+      id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, room_id TEXT NOT NULL REFERENCES rooms(id),
+      title TEXT NOT NULL, memory_enabled INTEGER NOT NULL DEFAULT 0 CHECK(memory_enabled IN (0,1)),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+    );
+    CREATE INDEX conversations_principal_updated ON conversations(principal_id, updated_at DESC);
+    CREATE TABLE conversation_messages (
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      sender TEXT NOT NULL CHECK(sender IN ('user','assistant')), content TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('complete','inference_failed','cancelled')),
+      provider_id TEXT, model_id TEXT, retrieved_memory_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX conversation_messages_order ON conversation_messages(conversation_id, created_at, id);
+    """),
+    (9, """
+    ALTER TABLE conversation_messages ADD COLUMN memory_status TEXT NOT NULL DEFAULT 'not_indexed';
+    CREATE TABLE conversation_memory_sources (
+      user_message_id TEXT PRIMARY KEY REFERENCES conversation_messages(id) ON DELETE CASCADE,
+      assistant_message_id TEXT NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      document_id TEXT REFERENCES documents(id),
+      status TEXT NOT NULL CHECK(status IN ('pending','indexed','excluded','failed')),
+      error_code TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX conversation_memory_status ON conversation_memory_sources(status, updated_at);
+    """),
+    (10, """
+    ALTER TABLE conversation_messages ADD COLUMN client_request_id TEXT;
+    CREATE UNIQUE INDEX conversation_message_idempotency ON conversation_messages(conversation_id, client_request_id)
+      WHERE client_request_id IS NOT NULL;
+    UPDATE conversations SET memory_enabled=1;
+    """),
+    (11, """
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, room_id TEXT NOT NULL REFERENCES rooms(id),
+      name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK(status IN ('active','planning','completed','on_hold')),
+      milestones_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX projects_principal_room ON projects(principal_id, room_id, updated_at DESC);
+    CREATE TABLE calendar_events (
+      id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, room_id TEXT NOT NULL REFERENCES rooms(id),
+      title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', starts_at TEXT NOT NULL, ends_at TEXT,
+      timezone TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('scheduled','cancelled')),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      CHECK(ends_at IS NULL OR ends_at > starts_at)
+    );
+    CREATE INDEX calendar_events_principal_start ON calendar_events(principal_id, starts_at);
+    CREATE TABLE local_settings (
+      principal_id TEXT PRIMARY KEY, settings_json TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    """),
 )
 
 
@@ -298,7 +437,7 @@ class Database:
     @staticmethod
     def _backfill_legacy_idempotency(connection: sqlite3.Connection) -> None:
         rows = connection.execute("""SELECT id,persona_owner,idempotency_key,title,description,item_type,status,priority,
-            category_id,room_id,due_date,due_at,timezone,source_text,created_at FROM tasks WHERE idempotency_key IS NOT NULL""").fetchall()
+            category_id,project_id,room_id,due_date,due_at,timezone,source_text,created_at FROM tasks WHERE idempotency_key IS NOT NULL""").fetchall()
         for row in rows:
             if row["persona_owner"] is None:
                 continue
@@ -306,6 +445,8 @@ class Database:
                 "status": row["status"], "priority": row["priority"], "category_id": row["category_id"],
                 "room_id": row["room_id"], "due_date": row["due_date"], "due_at": row["due_at"],
                 "timezone": row["timezone"], "source_text": row["source_text"]}
+            if row["project_id"] is not None:
+                fields["project_id"] = row["project_id"]
             encoded = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             fingerprint = hashlib.sha256(encoded).hexdigest()
             connection.execute("""INSERT INTO task_idempotency_keys

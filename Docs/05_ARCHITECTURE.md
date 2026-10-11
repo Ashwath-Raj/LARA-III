@@ -34,7 +34,7 @@ Dependency direction is from interfaces toward domain services: task/reminder do
 
 ### CLI and local dashboard
 
-- CLI is the first supported interaction surface; a local dashboard may expose the same application services through FastAPI.
+- The CLI and authenticated loopback FastAPI adapter call the same application services. The API binds to `127.0.0.1`; it does not provide a separate business-logic path.
 - UI code must call application services, not edit SQLite tables directly.
 - The dashboard displays proposals, task state, approval requests and execution evidence. It is not itself a security boundary.
 
@@ -58,6 +58,8 @@ Alternative states: `paused`, `blocked`, `failed`, `cancelled`, `needs_attention
 The lifecycle can revisit `running` after approval. Use explicit transitions; do not infer state from free-form model text. Each side-effecting step must have an idempotency strategy or a recovery procedure for uncertain outcomes.
 
 The Phase 4 SQLite job queue provides idempotent enqueue, typed payload revalidation, leases, capped retries, cancellation, pause/kill checks and a bounded foreground worker. Its implemented handler set is deliberately limited to local reminder delivery. The queue and handler registry are not a generic shell or browser execution interface.
+
+The AI Loop runs synchronously in the invoking CLI/API process and uses its own per-loop SQLite lease because no loop job handler exists. It persists an invocation record before each local model call and commits the result plus next pending step before releasing the lease. The total invocation budget is strict. A restart between calls resumes from the next pending role without replaying completed invocations; a stale in-flight call is treated as uncertain and requires review. The HTTP run/resume calls wait for their bounded invocation request; they are not background jobs.
 
 ### Policy and approvals
 

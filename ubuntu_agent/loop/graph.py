@@ -6,7 +6,7 @@ import json
 import uuid
 
 from ubuntu_agent.models import utc_now
-from ubuntu_agent.services import NotFoundError, PolicyDeniedError, ValidationError
+from ubuntu_agent.services import ConflictError, NotFoundError, PolicyDeniedError, ValidationError
 
 NODE_TYPES = {
     "goal", "constraint", "claim", "proposal", "counterargument", "evidence",
@@ -20,7 +20,8 @@ class LoopGraph:
         self.database = database
 
     def add_node(self, loop_id: str, node_type: str, display_name: str, content: str,
-                 *, room_id: str, sensitivity: str, provenance: dict | None = None) -> dict:
+                 *, room_id: str, sensitivity: str, provenance: dict | None = None,
+                 node_id: str | None = None) -> dict:
         if node_type not in NODE_TYPES:
             raise ValidationError("Unknown graph node type.")
         if not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 200:
@@ -28,12 +29,21 @@ class LoopGraph:
         if not isinstance(content, str) or len(content) > 20000:
             raise ValidationError("Node content is invalid.")
         now = utc_now()
-        node_id = str(uuid.uuid4())
+        node_id = node_id or str(uuid.uuid4())
+        if not isinstance(node_id, str) or not node_id or len(node_id) > 100:
+            raise ValidationError("Graph node ID is invalid.")
         with self.database.connect() as connection:
-            connection.execute("INSERT INTO loop_nodes VALUES (?,?,?,?,?,?,?,?,?,?)",
-                               (node_id, loop_id, node_type, display_name.strip(), room_id, sensitivity,
-                                content, json.dumps(provenance or {}, separators=(",", ":")), now, now))
-            return dict(connection.execute("SELECT * FROM loop_nodes WHERE id=?", (node_id,)).fetchone())
+            connection.execute(
+                """INSERT INTO loop_nodes VALUES (?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO NOTHING""",
+                (node_id, loop_id, node_type, display_name.strip(), room_id, sensitivity,
+                 content, json.dumps(provenance or {}, separators=(",", ":")), now, now),
+            )
+            row = connection.execute("SELECT * FROM loop_nodes WHERE id=?", (node_id,)).fetchone()
+            if (row is None or row["loop_id"] != loop_id or row["node_type"] != node_type
+                    or row["display_name"] != display_name.strip() or row["content"] != content):
+                raise ConflictError("Graph node ID already belongs to different loop data.")
+            return dict(row)
 
     def add_edge(self, loop_id: str, source_id: str, relation: str, target_id: str,
                  *, room_id: str, sensitivity: str) -> dict:

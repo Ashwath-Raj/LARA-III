@@ -93,6 +93,9 @@ class OllamaProvider:
         body: dict[str, Any] = {"model": self.model_id, "prompt": prompt, "stream": False}
         if response_schema is not None:
             body["format"] = response_schema
+            # Structured role responses are parsed against a strict contract;
+            # deterministic decoding reduces schema drift between retries/runs.
+            body["options"] = {"temperature": 0}
         request = urllib.request.Request(
             "http://127.0.0.1:11434/api/generate", data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"}, method="POST")
@@ -277,6 +280,11 @@ class ProviderRouter:
                               outcome="error", duration_ms=(time.perf_counter() - started) * 1000,
                               error=f"{type(exc).__name__}: {str(exc)[:200]}")
             raise
+
+    def generate_conversation(self, prompt: str, actor: Actor, *, room_id: str = "operations") -> GenerationResult:
+        selected = self._ensure_authorized(actor, provider="ollama", action_id="conversation.generate",
+            room_id=room_id, sensitivity="internal", resource_id="conversation")
+        return self.providers[selected].generate_text(prompt)
 
     def health_check(self, provider: str | None, actor: Actor) -> GenerationResult:
         selected = self.selected(provider)

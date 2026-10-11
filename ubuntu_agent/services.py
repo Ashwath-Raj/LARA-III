@@ -168,7 +168,7 @@ class TaskService(BaseService):
     def create_task(self, candidate: dict[str, Any], actor: Actor, idempotency_key: str | None = None) -> dict[str, Any]:
         if not isinstance(candidate, dict):
             raise ValidationError("Task candidate must be an object.")
-        candidate_fields = {"title", "description", "item_type", "status", "priority", "category", "room_id",
+        candidate_fields = {"title", "description", "item_type", "status", "priority", "category", "room_id", "project_id",
                             "due_date", "due_at", "timezone", "source_text"}
         if set(candidate) - candidate_fields:
             raise ValidationError("Task candidate contains unsupported fields.")
@@ -179,6 +179,7 @@ class TaskService(BaseService):
         priority = candidate.get("priority", "normal")
         category = candidate.get("category", "Personal / Admin")
         room_id = candidate.get("room_id", "operations")
+        project_id = candidate.get("project_id")
         due_date = _validate_due_date(candidate.get("due_date"))
         due_at = _validate_instant(candidate["due_at"], "due_at") if candidate.get("due_at") is not None else None
         timezone_name = candidate.get("timezone", "UTC")
@@ -206,9 +207,12 @@ class TaskService(BaseService):
             category_row = connection.execute("SELECT id FROM categories WHERE name = ? AND is_active = 1", (category,)).fetchone()
             if category_row is None:
                 raise ValidationError("Unknown or inactive category.")
-            fingerprint = _fingerprint({"title": title, "description": description, "item_type": item_type,
+            fingerprint_fields = {"title": title, "description": description, "item_type": item_type,
                 "status": status, "priority": priority, "category_id": category_row["id"], "room_id": room_id,
-                "due_date": due_date, "due_at": due_at, "timezone": timezone_name, "source_text": source_text})
+                "due_date": due_date, "due_at": due_at, "timezone": timezone_name, "source_text": source_text}
+            if project_id is not None:
+                fingerprint_fields["project_id"] = project_id
+            fingerprint = _fingerprint(fingerprint_fields)
             if idempotency_key:
                 if not isinstance(actor, Actor) or type(actor.principal_id) is not str or type(actor.persona_id) is not str:
                     raise PolicyDeniedError("Access denied.")
@@ -223,10 +227,15 @@ class TaskService(BaseService):
                         raise ConflictError("Idempotency key was already used for a different request.")
                     return self._task_row(connection, existing["task_id"])
             self._authorize(connection, actor, room_id, task_id, "task.create")
+            if project_id is not None:
+                project = connection.execute("SELECT id FROM projects WHERE id=? AND principal_id=? AND room_id=?",
+                                             (project_id, actor.principal_id, room_id)).fetchone()
+                if project is None:
+                    raise ValidationError("Project is unavailable in this task room.")
             connection.execute("""INSERT INTO tasks
-              (id,title,description,item_type,status,priority,category_id,room_id,persona_owner,due_date,due_at,timezone,source_text,created_at,updated_at,idempotency_key)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
-              (task_id,title,description,item_type,status,priority,category_row["id"],room_id,actor.persona_id,due_date,due_at,
+              (id,title,description,item_type,status,priority,category_id,project_id,room_id,persona_owner,due_date,due_at,timezone,source_text,created_at,updated_at,idempotency_key)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+              (task_id,title,description,item_type,status,priority,category_row["id"],project_id,room_id,actor.persona_id,due_date,due_at,
                timezone_name,source_text,now,now))
             if idempotency_key:
                 connection.execute("""INSERT INTO task_idempotency_keys
@@ -268,7 +277,7 @@ class TaskService(BaseService):
         _validate_string(task_id, "task_id", maximum=100)
         if not isinstance(patch, dict) or not patch:
             raise ValidationError("Patch must be a non-empty object.")
-        allowed = {"title", "description", "priority", "category", "due_date", "due_at", "timezone"}
+        allowed = {"title", "description", "priority", "category", "due_date", "due_at", "timezone", "project_id"}
         if set(patch) - allowed:
             raise ValidationError("Patch contains unsupported fields.")
         with self.database.connect() as connection:
@@ -280,7 +289,7 @@ class TaskService(BaseService):
             current = self._task_row(connection, task_id)
             values = {"title": current["title"], "description": current["description"], "priority": current["priority"],
                       "category_id": current["category_id"], "due_date": current["due_date"],
-                      "due_at": current["due_at"], "timezone": current["timezone"]}
+                      "due_at": current["due_at"], "timezone": current["timezone"], "project_id": current["project_id"]}
             if "title" in patch: values["title"] = _validate_string(patch["title"], "title", maximum=300)
             if "description" in patch: values["description"] = _validate_string(patch["description"], "description", required=False)
             if "priority" in patch:
@@ -299,6 +308,14 @@ class TaskService(BaseService):
                 try: ZoneInfo(patch["timezone"])
                 except ZoneInfoNotFoundError as exc: raise ValidationError("Unknown timezone.") from exc
                 values["timezone"] = patch["timezone"]
+            if "project_id" in patch:
+                project_id = patch["project_id"]
+                if project_id is not None:
+                    project = connection.execute("SELECT id FROM projects WHERE id=? AND principal_id=? AND room_id=?",
+                                                 (project_id, actor.principal_id, row["room_id"])).fetchone()
+                    if project is None:
+                        raise ValidationError("Project is unavailable in this task room.")
+                values["project_id"] = project_id
             _validate_deadline_pair(values["due_date"], values["due_at"], values["timezone"])
             deadline_changed = values["due_date"] != current["due_date"] or values["due_at"] != current["due_at"]
             reminder_updates: list[tuple[str, str, int]] = []
@@ -316,8 +333,8 @@ class TaskService(BaseService):
                         reminder_updates.append((reminder["id"], _relative_schedule(values["due_at"], offset), reminder["generation"]))
                     except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
                         raise ConflictError("A scheduled reminder cannot be safely rescheduled.") from exc
-            connection.execute("""UPDATE tasks SET title=?,description=?,priority=?,category_id=?,due_date=?,due_at=?,timezone=?,updated_at=? WHERE id=?""",
-                               (*values.values(), utc_now(), task_id))
+            connection.execute("""UPDATE tasks SET title=?,description=?,priority=?,category_id=?,due_date=?,due_at=?,timezone=?,project_id=?,updated_at=? WHERE id=?""",
+                               (values["title"],values["description"],values["priority"],values["category_id"],values["due_date"],values["due_at"],values["timezone"],values["project_id"],utc_now(),task_id))
             for reminder_id, scheduled_at, generation in reminder_updates:
                 _invalidate_reminder_jobs(connection, reminder_id, generation, utc_now())
                 connection.execute("UPDATE reminders SET scheduled_at=?,generation=generation+1,updated_at=? WHERE id=?",
@@ -347,6 +364,18 @@ class TaskService(BaseService):
                                (target_status, now if target_status == "done" else None, evidence if target_status == "done" else None, now, task_id))
             self._audit(connection, actor, "task.transition", task_id, "allow", "succeeded")
             return self._task_row(connection, task_id)
+
+    def delete_task(self, task_id: str, actor: Actor) -> bool:
+        _validate_string(task_id, "task_id", maximum=100)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT id,room_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise NotFoundError("Task not found.")
+            self._authorize(connection, actor, row["room_id"], task_id, "task.delete", hide_denial=True)
+            self._audit(connection, actor, "task.delete", task_id, "allow", "succeeded")
+            connection.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+            return True
 
 
 class ReminderService(BaseService):

@@ -7,13 +7,17 @@ name = "ubuntu-agent-local-core"
 version = "0.2.0"
 description = "Local-first Ubuntu Agent task core and optional inference adapters"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi==0.121.3",
+    "uvicorn==0.54.0",
+]
 
 [project.optional-dependencies]
 # Pin the provider SDK so the optional hosted adapter is reproducible while
 # leaving SQLite, local Ollama HTTP, tasks, and reminders dependency-free.
 gemini = ["google-genai==2.25.0"]
 rag = ["qdrant-client==1.14.3"]
+test = ["httpx==0.28.1", "pytest==8.3.5"]
 
 [tool.setuptools.packages.find]
 include = ["ubuntu_agent*"]

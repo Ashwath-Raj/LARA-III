@@ -10,7 +10,7 @@ from .bootstrap import PERSONAS, PRINCIPAL_ID
 from .database import Database
 from .models import Actor
 from .provider_config import ProviderConfig
-from .providers import ProviderError, ProviderRouter
+from .providers import GeminiProvider, OllamaProvider, ProviderError, ProviderRouter
 from .services import AgentError, ReminderService, TaskService
 from .task_capture import TaskCaptureService
 from .memory import MemoryService, MemoryError, QdrantLocalStore
@@ -19,6 +19,10 @@ from .approvals import ApprovalService
 from .notifications import UbuntuNotificationAdapter
 from .reminder_delivery import ReminderDeliveryHandler
 from .runtime import RuntimeControlService
+from .loop.orchestrator import LoopOrchestrator
+from .desktop.operator import DesktopOperatorService
+from .demo_seed import inspect_demo, seed_demo
+from .api import ApiSessionService, configured_origins, create_app
 
 
 def default_database_path() -> Path:
@@ -28,10 +32,18 @@ def default_database_path() -> Path:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="ubuntu-agent", description="Local task and reminder core")
-    result.add_argument("--db", type=Path, default=default_database_path(), help="SQLite path (default: XDG data directory)")
+    result.add_argument("--db", type=Path, default=None, help="SQLite path (default: XDG data directory)")
     result.add_argument("--persona", choices=tuple(PERSONAS), default="task_deadline_manager")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Initialize local SQLite database")
+    seed = commands.add_parser("seed-demo", help="Add clearly marked demo records without deleting existing data")
+    seed.add_argument("--environment", choices=("development", "dev", "test", "staging", "production"),
+                      default="development")
+    seed.add_argument("--allow-non-development", action="store_true",
+                      help="Explicitly allow demo records in staging or production environments")
+    seed.add_argument("--allow-production", action="store_true",
+                      help="Additional explicit opt-in required when environment is production")
+    commands.add_parser("demo-status", help="Show counts for marked LARA IV demo records")
     create = commands.add_parser("task-create", help="Create a typed task from JSON fields")
     create.add_argument("title")
     create.add_argument("--description", default="")
@@ -78,6 +90,32 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("jobs", help="List durable job state")
     job_cancel = commands.add_parser("job-cancel", help="Cancel a queued or leased job")
     job_cancel.add_argument("job_id")
+    loop_create = commands.add_parser("loop-create", help="Create a persistent AI loop")
+    loop_create.add_argument("goal")
+    loop_create.add_argument("--constraint", action="append", default=[])
+    loop_create.add_argument("--provider", choices=("ollama_api",), default="ollama_api")
+    loop_create.add_argument("--max-rounds", type=int, default=4,
+                             help="Total model-invocation budget (4-12), including any revision calls")
+    loop_list = commands.add_parser("loops", help="List AI loops")
+    loop_show = commands.add_parser("loop-show", help="Inspect one AI loop")
+    loop_show.add_argument("loop_id")
+    loop_run = commands.add_parser("loop-run", help="Start a new local four-role AI loop")
+    loop_run.add_argument("loop_id")
+    loop_run.add_argument("--invocation-limit", type=int,
+                          help="Persist a checkpoint and return after this many calls in this CLI process")
+    loop_resume = commands.add_parser("loop-resume", help="Resume a loop from its last persisted role checkpoint")
+    loop_resume.add_argument("loop_id")
+    loop_resume.add_argument("--invocation-limit", type=int,
+                             help="Persist a checkpoint and return after this many calls in this CLI process")
+    loop_cancel = commands.add_parser("loop-cancel", help="Cancel one AI loop")
+    loop_cancel.add_argument("loop_id")
+    desktop_preflight = commands.add_parser("desktop-preflight", help="Check local desktop capability without running automation")
+    api_session = commands.add_parser("api-session-create", help="Create a one-time local browser pairing token")
+    api_session.add_argument("--origin", action="append", required=True,
+                             help="Exact configured localhost browser origin; repeat for additional allowed origins")
+    api_session.add_argument("--ttl-hours", type=int, default=8, help="Session lifetime after pairing (1-24 hours)")
+    api = commands.add_parser("api-serve", help="Serve the authenticated local REST API on loopback")
+    api.add_argument("--port", type=int, default=8765)
     approvals = commands.add_parser("approvals", help="List pending approvals")
     approvals.add_argument("--all", action="store_true")
     approval_request = commands.add_parser("approval-request", help="Request approval for a policy-gated registered action")
@@ -125,7 +163,10 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    provider_command = args.command in {"provider-status", "provider-test", "task-preview"}
+    db_path = args.db or default_database_path()
+    provider_command = args.command in {
+        "provider-status", "provider-test", "task-preview", "loop-run", "loop-resume", "api-serve",
+    }
     config = None
     if provider_command:
         try:
@@ -137,18 +178,62 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"default_provider": config.default_provider,
                           "providers": config.provider_status()}, indent=2))
         return 0
-    db = Database(args.db)
+    if args.command in {"seed-demo", "demo-status"}:
+        if args.db is None:
+            print(json.dumps({"error": {"code": "DEMO_SEED_ERROR",
+                                        "message": "Pass an explicit --db path for demo data commands."}}),
+                  file=sys.stderr)
+            return 2
+        db = Database(args.db)
+        try:
+            if args.command == "seed-demo":
+                result = seed_demo(
+                    db,
+                    environment=args.environment,
+                    allow_non_development=args.allow_non_development,
+                    allow_production=args.allow_production,
+                )
+            else:
+                result = inspect_demo(db)
+        except AgentError as exc:
+            print(json.dumps({"error": {"code": exc.code, "message": str(exc)}}), file=sys.stderr)
+            return 2
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    db = Database(db_path)
     db.initialize()
     if args.command == "init":
-        print(json.dumps({"status": "ready", "database": str(args.db)}))
+        print(json.dumps({"status": "ready", "database": str(db_path)}))
         return 0
+    if args.command == "api-session-create":
+        try:
+            session_service = ApiSessionService(db, configured_origins())
+            token, expires_at = session_service.issue_pairing_token(args.origin, ttl_hours=args.ttl_hours)
+        except (AgentError, ValueError) as exc:
+            code = exc.code if isinstance(exc, AgentError) else "API_CONFIGURATION_ERROR"
+            print(json.dumps({"error": {"code": code, "message": str(exc)}}), file=sys.stderr)
+            return 2
+        print(json.dumps({
+            "pairing_token": token,
+            "expires_at": expires_at,
+            "allowed_origins": args.origin,
+            "note": "Use once in the local browser to create an HttpOnly session cookie.",
+        }))
+        return 0
+    if args.command == "api-serve" and not 1024 <= args.port <= 65535:
+        print(json.dumps({"error": {"code": "VALIDATION_ERROR", "message": "API port must be between 1024 and 65535."}}),
+              file=sys.stderr)
+        return 2
     actor = Actor(PRINCIPAL_ID, args.persona)
     tasks, reminders = TaskService(db), ReminderService(db)
+    loop_orchestrator = LoopOrchestrator(
+        db, ollama=OllamaProvider(config) if config is not None else None,
+    )
     provider_router = ProviderRouter(config=config) if config is not None else None
     try:
         if args.command == "memory-init":
-            QdrantLocalStore(args.db.parent / "qdrant", args.dimensions)
-            result = {"status": "ready", "vector_store": str(args.db.parent / "qdrant"),
+            QdrantLocalStore(db_path.parent / "qdrant", args.dimensions)
+            result = {"status": "ready", "vector_store": str(db_path.parent / "qdrant"),
                       "embedding_model": os.getenv("UBUNTU_AGENT_EMBEDDING_MODEL", "embeddinggemma"),
                       "dimensions": args.dimensions}
         elif args.command == "memory-ingest":
@@ -157,6 +242,15 @@ def main(argv: list[str] | None = None) -> int:
             result = MemoryService(db).search_memory(args.query, args.purpose, actor, limit=args.limit)
         elif args.command == "memory-reindex":
             result = MemoryService(db).reindex_memory_index(confirmed=args.confirm)
+        elif args.command == "api-serve":
+            import uvicorn
+            application = create_app(
+                db,
+                loop_orchestrator=loop_orchestrator,
+                provider_config=config,
+            )
+            uvicorn.run(application, host="127.0.0.1", port=args.port, log_level="info", access_log=False)
+            result = {"status": "stopped"}
         elif args.command == "task-create":
             result = tasks.create_task({"title": args.title, "description": args.description, "category": args.category,
                                         "room_id": args.room, "due_date": args.due_date, "priority": args.priority,
@@ -201,6 +295,24 @@ def main(argv: list[str] | None = None) -> int:
             result = JobQueue(db).list_jobs()
         elif args.command == "job-cancel":
             result = JobQueue(db).cancel(args.job_id)
+        elif args.command == "loop-create":
+            result = loop_orchestrator.create_loop(actor, goal=args.goal, constraints=args.constraint,
+                                                 provider_mode=args.provider,
+                                                 max_rounds=args.max_rounds)
+        elif args.command == "loops":
+            result = loop_orchestrator.list_loops(actor)
+        elif args.command == "loop-show":
+            result = loop_orchestrator.get_loop(args.loop_id, actor)
+        elif args.command == "loop-run":
+            result = loop_orchestrator.run_debate(args.loop_id, actor,
+                                                  invocation_limit=args.invocation_limit)
+        elif args.command == "loop-resume":
+            result = loop_orchestrator.resume_loop(args.loop_id, actor,
+                                                   invocation_limit=args.invocation_limit)
+        elif args.command == "loop-cancel":
+            result = loop_orchestrator.cancel(args.loop_id, actor)
+        elif args.command == "desktop-preflight":
+            result = DesktopOperatorService(db).preflight(actor)
         elif args.command == "approvals":
             result = ApprovalService(db).list_approvals(actor, include_terminal=args.all)
         elif args.command == "approval-request":
@@ -251,6 +363,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except JobNotFoundError as exc:
         print(json.dumps({"error": {"code": "NOT_FOUND", "message": str(exc)}}), file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        code = "API_CONFIGURATION_ERROR" if args.command == "api-serve" else "VALIDATION_ERROR"
+        print(json.dumps({"error": {"code": code, "message": str(exc)}}), file=sys.stderr)
         return 2
 
 

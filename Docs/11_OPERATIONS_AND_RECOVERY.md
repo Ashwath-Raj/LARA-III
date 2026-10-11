@@ -29,6 +29,8 @@ Apply user-only permissions to sensitive directories. Never commit the database,
 
 An unavailable model must not prevent users from viewing or manually editing stored tasks. An unavailable database must prevent mutations and agent execution.
 
+The optional interactive API process is started explicitly with `python -m ubuntu_agent --db PATH api-serve`; it binds to `127.0.0.1` and does not install a service or startup entry. Issue browser pairing tokens from the same database with `api-session-create`, configure exact localhost origins via `UBUNTU_AGENT_API_ORIGINS`, and exchange each token once. The API's synchronous loop routes are not worker dispatch and may be safely checkpointed with `invocation_limit`.
+
 ## Persistent reminders
 
 The scheduler must be database-driven, not a collection of in-memory timers.
@@ -68,6 +70,18 @@ After each meaningful step, save output references, verification status, audit e
 - **Provider/session expired:** pause for reauthentication; do not automate around consent.
 - **Budget exhausted or repeated identical failure:** stop and report the blocker.
 - **Global pause active:** dispatch no new tools; in-flight tools must be cancelled where supported and marked uncertain if cancellation cannot be confirmed.
+
+### AI Loop recovery
+
+The AI Loop is not dispatched through the general job queue. `loop-run` and `loop-resume` execute synchronously against `loop_execution_state` and `loop_rounds`:
+
+- Each individual model invocation has a stable ID, role-specific input/output, provider/model provenance, and a persisted status.
+- A completed invocation and the remaining role plan are committed together. After a process exits between roles, run `python -m ubuntu_agent --db PATH loop-resume LOOP_ID`; completed roles are loaded rather than called again.
+- SQLite leases prevent a second process from taking an active loop. A valid lease causes a conflict, not duplicate execution.
+- An expired lease with no active role can safely return to `waiting`. An expired lease with an active role has an unknown inference outcome; mark it failed, set the loop to `review_required`, and do not automatically repeat it.
+- Cancellation is persisted in the same lifecycle row and dominates a late model response. It cannot guarantee interruption of a local inference request already in progress.
+- `max_rounds` limits total model invocations (4-12), not debate cycles. Model failures are terminal for that loop; no implicit retries or cloud fallback are performed. A reviewer `revise` verdict gets at most one bounded Blue Team/Judge revision, followed by a Reviewer call only if budget remains.
+- Stale/review-required or failed loops must be inspected by the user; existing legacy synthesized loops migrated without role-specific invocations are classified `review_required`, not retroactively treated as four-role successes.
 
 ## Pause and kill switch
 
