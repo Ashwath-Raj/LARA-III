@@ -116,6 +116,7 @@ def parser() -> argparse.ArgumentParser:
     api_session.add_argument("--ttl-hours", type=int, default=8, help="Session lifetime after pairing (1-24 hours; pairing token expires in five minutes)")
     api = commands.add_parser("api-serve", help="Serve the authenticated local REST API on loopback")
     api.add_argument("--port", type=int, default=8765)
+    api.add_argument("--host", default="127.0.0.1", help="Bind address (local demo mode accepts loopback IPs only)")
     approvals = commands.add_parser("approvals", help="List pending approvals")
     approvals.add_argument("--all", action="store_true")
     approval_request = commands.add_parser("approval-request", help="Request approval for a policy-gated registered action")
@@ -225,6 +226,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": {"code": "VALIDATION_ERROR", "message": "API port must be between 1024 and 65535."}}),
               file=sys.stderr)
         return 2
+    if args.command == "api-serve" and os.environ.get("LARA_LOCAL_DEMO", "0") == "1":
+        import ipaddress
+        try:
+            is_loopback = ipaddress.ip_address(args.host).is_loopback
+        except ValueError:
+            is_loopback = False
+        if not is_loopback:
+            print(json.dumps({"error": {"code": "API_CONFIGURATION_ERROR", "message": "LARA_LOCAL_DEMO requires --host to be a loopback IP address."}}), file=sys.stderr)
+            return 2
     actor = Actor(PRINCIPAL_ID, args.persona)
     tasks, reminders = TaskService(db), ReminderService(db)
     loop_orchestrator = LoopOrchestrator(
@@ -249,8 +259,9 @@ def main(argv: list[str] | None = None) -> int:
                 db,
                 loop_orchestrator=loop_orchestrator,
                 provider_config=config,
+                bind_host=args.host,
             )
-            uvicorn.run(application, host="127.0.0.1", port=args.port, log_level="info", access_log=False)
+            uvicorn.run(application, host=args.host, port=args.port, log_level="info", access_log=False)
             result = {"status": "stopped"}
         elif args.command == "task-create":
             result = tasks.create_task({"title": args.title, "description": args.description, "category": args.category,

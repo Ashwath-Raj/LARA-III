@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import importlib.util
 import json
 import logging
@@ -363,9 +364,27 @@ def create_app(
     provider_probe: Callable[[], dict[str, Any]] | None = None,
     conversation_generator: Callable[[str, Actor, str], Any] | None = None,
     memory_service: MemoryService | None = None,
+    local_demo: bool | None = None,
+    bind_host: str | None = None,
 ) -> FastAPI:
-    database.initialize()
+    demo_enabled = (os.environ.get("LARA_LOCAL_DEMO", "0") == "1") if local_demo is None else local_demo
+    if os.environ.get("LARA_LOCAL_DEMO", "0") not in {"", "0", "1"} and local_demo is None:
+        raise ValueError("LARA_LOCAL_DEMO must be unset, 0, or 1.")
     origins = configured_origins(allowed_origins)
+    try:
+        loopback_bind = ipaddress.ip_address(bind_host).is_loopback if bind_host is not None else False
+    except (TypeError, ValueError):
+        loopback_bind = False
+    if demo_enabled:
+        if not loopback_bind:
+            raise ValueError("LARA_LOCAL_DEMO requires the API bind address to be a loopback IP.")
+        if allowed_origins is None and not os.environ.get("UBUNTU_AGENT_API_ORIGINS"):
+            raise ValueError("LARA_LOCAL_DEMO requires UBUNTU_AGENT_API_ORIGINS to explicitly configure the frontend origin.")
+        if len(origins) != 1:
+            raise ValueError("LARA_LOCAL_DEMO requires exactly one configured frontend origin.")
+        if any(urlsplit(origin).scheme != "http" or urlsplit(origin).hostname not in {"localhost", "127.0.0.1", "::1"} for origin in origins):
+            raise ValueError("LARA_LOCAL_DEMO requires explicitly configured loopback HTTP frontend origins.")
+    database.initialize()
     task_service = TaskService(database)
     reminder_service = ReminderService(database)
     if loop_orchestrator is None:
@@ -380,6 +399,7 @@ def create_app(
     app = FastAPI(title="LARA IV Local API", version="1.0.0", openapi_url=f"{API_PREFIX}/openapi.json")
     app.state.database = database
     app.state.allowed_origins = origins
+    app.state.local_demo = demo_enabled
 
     @app.middleware("http")
     async def local_request_guards(request: Request, call_next):
@@ -391,6 +411,9 @@ def create_app(
             hostname = None
         if hostname not in {"localhost", "127.0.0.1", "::1"}:
             return _error_response(request, 400, "INVALID_HOST", "The API accepts loopback hostnames only.")
+        if demo_enabled and request.url.path.startswith(f"{API_PREFIX}/"):
+            if request.headers.get("origin") not in origins:
+                return _error_response(request, 403, "ORIGIN_NOT_ALLOWED", "Local demo requests require the configured frontend origin.")
         content_length = request.headers.get("content-length")
         if content_length:
             try:
@@ -419,6 +442,10 @@ def create_app(
 
     def require_session(request: Request) -> dict[str, Any]:
         origin = request.headers.get("origin")
+        if demo_enabled:
+            if origin not in origins:
+                raise ApiError(403, "ORIGIN_NOT_ALLOWED", "Local demo requests require the configured frontend origin.")
+            return {"id": "local-demo", "principal_id": PRINCIPAL_ID, "expires_at": None}
         safe_method = request.method in {"GET", "HEAD", "OPTIONS"}
         if not origin and not safe_method:
             raise ApiError(403, "ORIGIN_REQUIRED", "State-changing requests require the paired browser origin.")
@@ -556,6 +583,10 @@ def create_app(
 
     @app.post(f"{API_PREFIX}/auth/session", status_code=200)
     async def exchange_session(payload: SessionExchangeRequest, request: Request, response: Response):
+        if demo_enabled:
+            if request.headers.get("origin") not in origins:
+                raise ApiError(403, "ORIGIN_NOT_ALLOWED", "Local demo requests require the configured frontend origin.")
+            raise ApiError(409, "PAIRING_DISABLED", "Browser pairing is disabled in localhost demo mode.")
         origin = request.headers.get("origin")
         peer = request.client.host if request.client else "unknown"
         rate_limiter.check(peer)

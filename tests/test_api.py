@@ -359,6 +359,42 @@ class TestApiContract(unittest.TestCase):
         self.assertEqual(400, bad_host.status_code)
         client.close()
 
+    def test_local_demo_skips_pairing_but_requires_exact_loopback_origin(self):
+        demo_app = create_app(
+            self.database,
+            loop_orchestrator=self.orchestrator,
+            allowed_origins=("http://127.0.0.1:5173",),
+            local_demo=True,
+            bind_host="127.0.0.1",
+            provider_probe=lambda: {"status":"model_missing", "provider":"ollama", "model":"test"},
+            conversation_generator=lambda prompt, actor, room: GenerationResult("ollama", "test-gemma", "Local answer."),
+            memory_service=self.memory,
+        )
+        client = TestClient(demo_app, base_url="http://127.0.0.1:8765")
+        try:
+            headers = {"Origin":"http://127.0.0.1:5173"}
+            created = client.post("/api/v1/tasks", json={"title":"Local demo task", "category":"Personal / Admin"}, headers=headers)
+            self.assertEqual(201, created.status_code, created.text)
+            self.assertEqual(0, len(client.cookies))
+            pairing = client.post("/api/v1/auth/session", json={"pairing_token":"p" * 48}, headers=headers)
+            self.assertEqual(409, pairing.status_code)
+            untrusted = client.get("/api/v1/tasks", headers={"Origin":"http://localhost:5173"})
+            self.assertEqual(403, untrusted.status_code)
+            missing_origin = client.post("/api/v1/tasks", json={"title":"No origin", "category":"Personal / Admin"})
+            self.assertEqual(403, missing_origin.status_code)
+        finally:
+            client.close()
+
+    def test_local_demo_rejects_non_loopback_bind(self):
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            create_app(self.database, allowed_origins=("http://127.0.0.1:5173",), local_demo=True, bind_host="0.0.0.0")
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            create_app(self.database, allowed_origins=("http://127.0.0.1:5173",), local_demo=True)
+
+    def test_local_demo_rejects_non_loopback_frontend_origin(self):
+        with self.assertRaisesRegex(ValueError, "loopback HTTP"):
+            create_app(self.database, allowed_origins=("https://lara.example",), local_demo=True, bind_host="127.0.0.1")
+
     def test_loop_crud_execution_roles_artifacts_and_cancellation_use_real_services(self):
         create = self.client.post(
             "/api/v1/loops",
